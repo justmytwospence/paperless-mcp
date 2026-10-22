@@ -360,7 +360,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
 
   server.tool(
     "post_document",
-    "Agents: do not use this. To add a file from the web (e.g. a paper PDF), use post_document_from_url (it takes a URL). This tool needs the whole file inlined as base64. Upload a new document to Paperless-NGX with optional metadata like title, correspondent, document type, tags, and custom fields. Provide either 'file' (base64-encoded content) or 'file_path' (absolute path to a file on the server's filesystem). Using file_path avoids base64 encoding overhead for large files. SECURITY: When using file_path, set PAPERLESS_MCP_UPLOAD_PATHS environment variable to restrict uploads to specific directories (colon-separated paths).",
+    "Agents: do not use this. To add a file from the web (e.g. a paper PDF), use post_document_from_url (it takes a URL); for a file you already have, save it to your upload folder and use post_document_from_file. This tool needs the whole file inlined as base64. Upload a new document to Paperless-NGX with optional metadata like title, correspondent, document type, tags, and custom fields. Provide either 'file' (base64-encoded content) or 'file_path' (absolute path to a file on the server's filesystem). Using file_path avoids base64 encoding overhead for large files. SECURITY: When using file_path, set PAPERLESS_MCP_UPLOAD_PATHS environment variable to restrict uploads to specific directories (colon-separated paths).",
     postDocumentBaseSchema.shape,
     withErrorHandling(async (args, extra) => {
       if (!api) throw new Error("Please configure API connection first");

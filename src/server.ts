@@ -7,6 +7,7 @@ import { registerCorrespondentTools } from "./tools/correspondents";
 import { registerCustomFieldTools } from "./tools/customFields";
 import { registerDocumentTools } from "./tools/documents";
 import { registerDocumentTypeTools } from "./tools/documentTypes";
+import { registerFileUploadTools } from "./tools/fileUpload";
 import { registerMailTools } from "./tools/mail";
 import { registerNoteTools } from "./tools/notes";
 import { registerTagTools } from "./tools/tags";
@@ -40,6 +41,7 @@ export function createMcpServer({
   registerCustomFieldTools(server, api);
   registerMailTools(server, api);
   registerUrlUploadTools(server, api);
+  registerFileUploadTools(server, api);
   return server;
 }
 
