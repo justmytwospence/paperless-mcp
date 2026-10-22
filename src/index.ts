@@ -86,7 +86,10 @@ async function main() {
     }
 
     const app = express();
-    app.use(express.json());
+    // Express defaults to 100kb, which caps post_document's base64 file at ~73 kB.
+    app.use(
+      express.json({ limit: process.env.PAPERLESS_MCP_BODY_LIMIT || "100kb" })
+    );
 
     // Store transports for each session
     const sseTransports: Record<string, SSEServerTransport> = {};
