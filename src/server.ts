@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type express from "express";
 import { PaperlessAPI } from "./api/PaperlessAPI";
+import { setPublicUrl } from "./api/documentLinks";
 import { registerDocumentResources } from "./resources/documents";
 import { registerCorrespondentTools } from "./tools/correspondents";
 import { registerCustomFieldTools } from "./tools/customFields";
@@ -23,6 +24,7 @@ export function createMcpServer({
   version,
   publicUrl,
 }: CreateMcpServerOptions): McpServer {
+  setPublicUrl(publicUrl);
   const api = new PaperlessAPI(baseUrl, token);
   const server = new McpServer(
     { name: "paperless-ngx", version },
@@ -94,11 +96,6 @@ Paperless-NGX MCP Server Instructions
 
 When a user asks to "remove" something, prefer operations that affect specific documents. Only use DELETE operations when explicitly asked to delete from the system.
 
-To view documents in your Paperless-NGX web interface, construct URLs using this pattern:
-${publicUrl}/documents/{document_id}/
-
-Example: If your base URL is "http://localhost:8000", the web interface URL would be "http://localhost:8000/documents/123/" for document ID 123.
-
-The document tools return JSON data with document IDs that you can use to construct these URLs.
+When answering about a specific document, cite it with a clickable Paperless web UI link, not just a title or ID. Document search and detail results include web_url. For document ID 123 the direct link is ${publicUrl}/documents/123/details. Use ${publicUrl}/documents/{document_id}/details for any other ID (including newly uploaded or duplicate documents). Do not link to the internal API URL or the paperless:// MCP resource URI.
         `;
 }

@@ -5,6 +5,7 @@ import { constants } from "fs";
 import { basename, isAbsolute } from "path";
 import { convertDocsWithNames } from "../api/documentEnhancer";
 import { PaperlessAPI } from "../api/PaperlessAPI";
+import { documentUrl, LINK_GUIDANCE } from "../api/documentLinks";
 import { arrayNotEmpty } from "./utils/empty";
 import {
   BuildDocumentQueryArgs,
@@ -432,7 +433,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
 
   server.tool(
     "list_documents",
-    "List and filter documents with pagination and common Paperless filters such as title search, correspondent, document type, tag, storage path, creation date, archive serial number, and simple custom field filters. Use 'query_documents' for full-text query, structured custom field conditions, or advanced documented /api/documents/ query parameters. IMPORTANT: For queries like 'the last 3 contributions' or when searching by tag, correspondent, document type, or storage path, first use the relevant lookup tool to find the correct ID. Note: Document content is excluded from results by default. Use 'get_document_content' when you need the document text.",
+    "List and filter documents with pagination and common Paperless filters such as title search, correspondent, document type, tag, storage path, creation date, archive serial number, and simple custom field filters. Use 'query_documents' for full-text query, structured custom field conditions, or advanced documented /api/documents/ query parameters. IMPORTANT: For queries like 'the last 3 contributions' or when searching by tag, correspondent, document type, or storage path, first use the relevant lookup tool to find the correct ID. Note: Document content is excluded from results by default. Use 'get_document_content' when you need the document text." + LINK_GUIDANCE,
     LIST_DOCUMENTS_ARGS_SHAPE,
     withErrorHandling(async (args, extra) => {
       if (!api) throw new Error("Please configure API connection first");
@@ -442,7 +443,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
 
   server.tool(
     "query_documents",
-    "Query documents using the full-text query engine plus structured Paperless filters. Use this for complex filtering, custom field conditions, or any documented /api/documents/ query parameters that are not exposed as first-class arguments. Prefer the dedicated top-level arguments where available. custom_field_query supports [field_name_or_id, operator, value] leaves or ['AND'|'OR', [clause1, clause2]] groups. Note: Document content is excluded from results by default. Use 'get_document_content' when you need the document text.",
+    "Query documents using the full-text query engine plus structured Paperless filters. Use this for complex filtering, custom field conditions, or any documented /api/documents/ query parameters that are not exposed as first-class arguments. Prefer the dedicated top-level arguments where available. custom_field_query supports [field_name_or_id, operator, value] leaves or ['AND'|'OR', [clause1, clause2]] groups. Note: Document content is excluded from results by default. Use 'get_document_content' when you need the document text." + LINK_GUIDANCE,
     QUERY_DOCUMENTS_ARGS_SHAPE,
     withErrorHandling(async (args, extra) => {
       if (!api) throw new Error("Please configure API connection first");
@@ -452,7 +453,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
 
   server.tool(
     "get_document",
-    "Get a specific document by ID with full details including correspondent, document type, tags, and custom fields. Note: Document content is excluded from results by default. Use 'get_document_content' to retrieve content when needed.",
+    "Get a specific document by ID with full details including correspondent, document type, tags, and custom fields. Note: Document content is excluded from results by default. Use 'get_document_content' to retrieve content when needed." + LINK_GUIDANCE,
     {
       id: z.number(),
     },
@@ -465,7 +466,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
 
   server.tool(
     "get_document_content",
-    "Get the text content of a specific document by ID. Use this when you need to read or analyze the actual document text.",
+    "Get the text content of a specific document by ID. Use this when you need to read or analyze the actual document text." + LINK_GUIDANCE,
     {
       id: z.number(),
     },
@@ -479,6 +480,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
             text: JSON.stringify({
               id: doc.id,
               title: doc.title,
+              web_url: documentUrl(doc.id),
               content: doc.content,
             }),
           },
@@ -489,7 +491,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
 
   server.tool(
     "search_documents",
-    "Deprecated compatibility wrapper for full-text document search. Use 'query_documents' with the 'query' argument for new integrations. Note: Document content is excluded from results by default. Use 'get_document_content' to retrieve content when needed.",
+    "Deprecated compatibility wrapper for full-text document search. Use 'query_documents' with the 'query' argument for new integrations. Note: Document content is excluded from results by default. Use 'get_document_content' to retrieve content when needed." + LINK_GUIDANCE,
     SEARCH_DOCUMENTS_ARGS_SHAPE,
     withErrorHandling(async (args, extra) => {
       if (!api) throw new Error("Please configure API connection first");

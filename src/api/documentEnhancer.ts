@@ -2,6 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types";
 import { PaperlessAPI } from "./PaperlessAPI";
 import { Document, DocumentsResponse } from "./types";
 import { NamedItem } from "./utils";
+import { documentUrl } from "./documentLinks";
 
 interface CustomField {
   field: number;
@@ -101,7 +102,7 @@ async function enhanceDocumentsArray(
   return documents
     .map((doc) => {
       const { content, ...docWithoutContent } = doc;
-      return docWithoutContent;
+      return { ...docWithoutContent, web_url: documentUrl(doc.id) };
     })
     .map((doc) => ({
       ...doc,
