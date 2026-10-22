@@ -10,6 +10,7 @@ import { registerDocumentTypeTools } from "./tools/documentTypes";
 import { registerMailTools } from "./tools/mail";
 import { registerNoteTools } from "./tools/notes";
 import { registerTagTools } from "./tools/tags";
+import { registerUrlUploadTools } from "./tools/urlUpload";
 
 export interface CreateMcpServerOptions {
   baseUrl: string;
@@ -38,6 +39,7 @@ export function createMcpServer({
   registerDocumentTypeTools(server, api);
   registerCustomFieldTools(server, api);
   registerMailTools(server, api);
+  registerUrlUploadTools(server, api);
   return server;
 }
 
