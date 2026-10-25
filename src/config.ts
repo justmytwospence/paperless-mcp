@@ -48,3 +48,5 @@ export const CHUNK_OVERLAP_TOKENS = int("PAPERLESS_MCP_CHUNK_OVERLAP_TOKENS", 64
 export const SYNC_INTERVAL_MINUTES = int("PAPERLESS_MCP_SYNC_INTERVAL_MINUTES", 10);
 export const RECONCILE_INTERVAL_MINUTES = int("PAPERLESS_MCP_RECONCILE_INTERVAL_MINUTES", 60);
 export const EMBED_THREADS = int("PAPERLESS_MCP_EMBED_THREADS", 1);
+// HTTP keep-alive: longer than any reverse proxy's idle pool timeout (see index.ts).
+export const KEEP_ALIVE_TIMEOUT_MS = int("PAPERLESS_MCP_KEEP_ALIVE_MS", 120_000);

@@ -21,6 +21,10 @@ import { jsonResult, OPEN_WRITE, READ_ONLY, registerTool } from "./utils/registe
 const FETCH_TIMEOUT_MS = 180 * 1000;
 const MAX_REDIRECTS = 5;
 export const MAX_WAIT_SECONDS = 120;
+// Many MCP clients abandon a tool call after 60 s, so a call never runs longer
+// than this, download time included; a slower outcome is reported as pending.
+export const CALL_BUDGET_SECONDS = 45;
+const DEFAULT_WAIT_SECONDS = 30;
 const POLL_INTERVAL_MS = 2000;
 // Some publishers (Springer, several university repositories) refuse clients
 // that do not look like a browser.
@@ -418,15 +422,18 @@ export async function waitForTask(
 export async function uploadOutcome(
   api: PaperlessAPI,
   response: unknown,
-  waitSeconds = 30
+  waitSeconds = DEFAULT_WAIT_SECONDS,
+  /** When the tool call started: the wait counts from there, not from the upload. */
+  startedAt = Date.now()
 ): Promise<Record<string, unknown>> {
   if (typeof response === "string" && /^\d+$/.test(response)) {
     const id = Number(response);
     return { outcome: "created", document_id: id, web_url: documentUrl(id) };
   }
   if (typeof response === "string") {
-    return waitSeconds > 0
-      ? { ...(await waitForTask(api, response, waitSeconds)) }
+    const left = (Math.min(waitSeconds, CALL_BUDGET_SECONDS) * 1000 - (Date.now() - startedAt)) / 1000;
+    return waitSeconds > 0 && left > 0
+      ? { ...(await waitForTask(api, response, left)) }
       : { task_id: response, status: "pending", outcome: "pending" };
   }
   return { status: response };
@@ -447,7 +454,9 @@ export const UPLOAD_METADATA_SHAPE = {
     .max(MAX_WAIT_SECONDS)
     .optional()
     .describe(
-      `How long to wait for Paperless to consume the file before returning (0-${MAX_WAIT_SECONDS}, default 30). 0 returns the task id immediately.`
+      `How long the call may take, download included, waiting for Paperless to consume the file (0-${MAX_WAIT_SECONDS}, default ${DEFAULT_WAIT_SECONDS}; ` +
+        `capped at ${CALL_BUDGET_SECONDS}, as many clients give up after 60 s). 0 returns the task id immediately; ` +
+        "a slower outcome comes back as 'pending' with a task_id for get_task_status."
     ),
 };
 
@@ -460,7 +469,7 @@ export function registerUrlUploadTools(server: McpServer, api: PaperlessAPI) {
       "Use the DIRECT file link, not a landing page (e.g. https://arxiv.org/pdf/<id>, not /abs/<id>); " +
       "an HTML response is rejected. Only public http(s) URLs are fetched. " +
       "Set 'title' (or a descriptive 'filename' like 'Author Year - Title.pdf'), otherwise the " +
-      "title starts as the URL's filename. By default waits up to 30s for Paperless to finish " +
+      "title starts as the URL's filename. By default waits up to 30s (at most 45s, download included) for Paperless to finish " +
       "consuming and reports the outcome: 'created' with document_id, 'duplicate' with the existing " +
       "document (re-adding a paper already in the library is rejected, not duplicated), 'failed', or " +
       "'pending' -- check a pending task later with get_task_status. When reporting a created " +
@@ -479,6 +488,7 @@ export function registerUrlUploadTools(server: McpServer, api: PaperlessAPI) {
     },
     OPEN_WRITE,
     async (args) => {
+      const startedAt = Date.now();
       const fetched = await fetchDocument(args.url);
       if (fetched.body.length === 0) {
         throw new Error(`${fetched.finalUrl} returned an empty body.`);
@@ -503,7 +513,7 @@ export function registerUrlUploadTools(server: McpServer, api: PaperlessAPI) {
         filename,
         bytes: fetched.body.length,
         content_type: fetched.contentType || null,
-        ...(await uploadOutcome(api, response, wait_seconds)),
+        ...(await uploadOutcome(api, response, wait_seconds, startedAt)),
       };
       return jsonResult(result, true);
     }

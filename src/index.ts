@@ -149,6 +149,12 @@ if (transport === "stdio") {
         served.map((s) => (s.library.name === "default" ? "/mcp" : `/${s.library.name}/mcp`)).join(", ")
     )
   );
+  // Outlive the reverse proxy's idle pooled connections: with Node's 5 s default,
+  // the proxy can reuse a connection the server is just closing, and the request
+  // on it fails with a connection reset.
+  const nodeServer = httpServer as import("node:http").Server;
+  nodeServer.keepAliveTimeout = config.KEEP_ALIVE_TIMEOUT_MS;
+  nodeServer.headersTimeout = config.KEEP_ALIVE_TIMEOUT_MS + 5_000;
   const shutdown = async () => {
     for (const s of served) s.syncer?.stop();
     await Promise.all(handlers.map((h) => h.close()));

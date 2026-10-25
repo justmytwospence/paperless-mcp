@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setPublicUrl } from "../api/documentLinks.js";
-import { deriveFilename, isPublicAddress, looksLikeHtml, scopedTaskSummary, summarizeTask } from "./urlUpload.js";
+import { deriveFilename, isPublicAddress, looksLikeHtml, scopedTaskSummary, summarizeTask, uploadOutcome } from "./urlUpload.js";
 
 const pdf = Buffer.from("%PDF-1.7\n...");
 
@@ -96,4 +96,17 @@ test("another library's task is not reported; one that created a document here i
     (await scopedTaskSummary(scopedApi(["p"]), { task_id: "p", status: "STARTED" }))?.outcome,
     "pending"
   );
+});
+
+test("the wait counts from the start of the call and is capped below client timeouts", async () => {
+  let polls = 0;
+  const api = { request: async () => (polls++, [{ task_id: "t", status: "STARTED" }]), scope: async () => null } as any;
+  // The download already used the whole budget: report pending without polling.
+  const late = await uploadOutcome(api, "t", 30, Date.now() - 31_000);
+  assert.deepEqual([late.outcome, late.task_id, polls], ["pending", "t", 0]);
+  // A large wait is capped: 120 s asked, 44 s already spent, so about 1 s of polling.
+  const t0 = Date.now();
+  const capped = await uploadOutcome(api, "t", 120, Date.now() - 44_000);
+  assert.equal(capped.outcome, "pending");
+  assert.ok(Date.now() - t0 < 3_000, `waited ${Date.now() - t0} ms`);
 });

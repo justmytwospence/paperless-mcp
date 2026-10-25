@@ -26,7 +26,13 @@ export function resolveUpload(root: string, rel: string): { abs: string; uploade
     throw new Error("path must be relative to the upload folder, e.g. 'agent-alice/report.pdf'.");
   }
   const rootReal = fs.realpathSync(root);
-  const abs = fs.realpathSync(path.resolve(rootReal, rel));
+  let abs: string;
+  try {
+    abs = fs.realpathSync(path.resolve(rootReal, rel));
+  } catch {
+    // The server's own paths stay out of the message.
+    throw new Error(`${rel} does not exist in the upload folder.`);
+  }
   if (!abs.startsWith(rootReal + path.sep)) {
     throw new Error("path resolves outside the upload folder.");
   }
@@ -71,7 +77,7 @@ export function registerFileUploadTools(server: McpServer, api: PaperlessAPI, ro
       "that folder is mounted for you), then call this with 'path' relative to the upload area: " +
       "'<your agent folder>/<file name>', e.g. 'agent-alice/invoice.pdf'. For documents on the web use " +
       "post_document_from_url instead. The document is tagged with your agent folder's name. Set 'title' (and other " +
-      "metadata) if you know it. Waits for Paperless to consume the file (default 30s) and reports " +
+      "metadata) if you know it. Waits for Paperless to consume the file (default 30s, at most 45s) and reports " +
       "'created' with document_id and web_url, 'duplicate' with the existing document, 'failed', or " +
       "'pending' (check later with get_task_status). You may delete your copy afterwards.",
     {
@@ -90,6 +96,7 @@ export function registerFileUploadTools(server: McpServer, api: PaperlessAPI, ro
     },
     WRITE,
     async (args) => {
+      const startedAt = Date.now();
       const { abs, uploader } = resolveUpload(root, args.path);
       const body = fs.readFileSync(abs);
       const name = path.basename(abs);
@@ -104,7 +111,7 @@ export function registerFileUploadTools(server: McpServer, api: PaperlessAPI, ro
         uploader,
         filename,
         bytes: body.length,
-        ...(await uploadOutcome(api, response, wait_seconds)),
+        ...(await uploadOutcome(api, response, wait_seconds, startedAt)),
       };
       return jsonResult(result, true);
     }

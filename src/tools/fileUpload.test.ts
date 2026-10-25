@@ -32,3 +32,15 @@ test("uploads are confined to an agent folder under the root", () => {
     fs.rmSync(outside, { recursive: true, force: true });
   }
 });
+
+test("a missing file is reported without the server's own paths", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "uploads-"));
+  try {
+    assert.throws(
+      () => resolveUpload(root, "agent-nobody/x.pdf"),
+      (err: Error) => err.message === "agent-nobody/x.pdf does not exist in the upload folder." && !err.message.includes(root)
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
