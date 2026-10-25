@@ -131,16 +131,39 @@ export class PaperlessAPI {
     return "";
   }
 
-  /** Throws OutOfScopeError unless every document is in scope (and exists). */
-  async assertInScope(ids: number[]): Promise<void> {
-    if (!(await this.scope()) || !ids.length) return;
+  /** The ids that exist and are in scope (all of them on an unscoped server). */
+  async documentsInScope(ids: number[]): Promise<Set<number>> {
     const unique = [...new Set(ids)];
+    if (!(await this.scope()) || !unique.length) return new Set(unique);
     const res = await this.getDocuments(
       `?id__in=${unique.join(",")}&fields=id&page_size=${unique.length}`
     );
-    const found = new Set((res.results || []).map((d) => d.id));
-    const missing = unique.filter((id) => !found.has(id));
+    return new Set((res.results || []).map((d) => d.id));
+  }
+
+  /** Throws OutOfScopeError unless every document is in scope (and exists). */
+  async assertInScope(ids: number[]): Promise<void> {
+    if (!(await this.scope()) || !ids.length) return;
+    const found = await this.documentsInScope(ids);
+    const missing = [...new Set(ids)].filter((id) => !found.has(id));
     if (missing.length) throw new OutOfScopeError(`Document ${missing.join(", ")}`);
+  }
+
+  /**
+   * Consume tasks this client started. A task's outcome can name a document in
+   * another library (Paperless detects duplicates across all of them), so a scoped
+   * server only reports tasks it started itself, or ones whose document is its own.
+   */
+  private readonly tasks = new Map<string, number>();
+
+  rememberTask(taskId: string): void {
+    this.tasks.set(taskId, Date.now());
+    // Bounded: the oldest are forgotten first (Map keeps insertion order).
+    while (this.tasks.size > 5000) this.tasks.delete(this.tasks.keys().next().value!);
+  }
+
+  startedTask(taskId: string): boolean {
+    return this.tasks.has(taskId);
   }
 
   /** Throws unless assigning this document type (null: none) keeps a document in scope. */
@@ -306,11 +329,14 @@ export class PaperlessAPI {
       return this.fail(res, url, "POST");
     }
     const text = await res.text();
+    let parsed: unknown = text;
     try {
-      return JSON.parse(text);
+      parsed = JSON.parse(text);
     } catch {
-      return text;
+      // Not JSON; keep the text.
     }
+    if (typeof parsed === "string" && !/^\d+$/.test(parsed)) this.rememberTask(parsed);
+    return parsed as string;
   }
 
   async getDocuments(query = ""): Promise<DocumentsResponse> {

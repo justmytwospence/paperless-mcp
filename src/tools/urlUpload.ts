@@ -301,7 +301,11 @@ export interface TaskSummary {
   document_id?: number | null;
   web_url?: string | null;
   duplicate_of?: { id: number; title: string; web_url: string | null }[];
+  /** Set when the matching document is in another library, which this one cannot see. */
+  duplicate_outside_library?: boolean;
 }
+
+const DUPLICATE_RESULT = /duplicate of document #(\d+)/i;
 
 // Accepts both the API v9 and v10 task shapes, so an API version bump degrades to
 // missing fields rather than wrong ones.
@@ -323,9 +327,15 @@ export function summarizeTask(task: any): TaskSummary {
     result = task.result_data;
   }
   const duplicates: any[] = Array.isArray(task.duplicate_documents)
-    ? task.duplicate_documents
+    ? [...task.duplicate_documents]
     : [];
   const out: TaskSummary = { task_id: task.task_id, status, result };
+  // A duplicate's own list is emptied once the matched document is gone; the
+  // result text still names it.
+  const named = typeof result === "string" ? result.match(DUPLICATE_RESULT) : null;
+  if (!duplicates.length && named && status === "failure") {
+    duplicates.push({ id: Number(named[1]), title: null });
+  }
   if (duplicates.length) {
     out.outcome = "duplicate";
     out.duplicate_of = duplicates.map((d) => ({
@@ -345,6 +355,37 @@ export function summarizeTask(task: any): TaskSummary {
   return out;
 }
 
+/**
+ * summarizeTask, confined to the server's library: a duplicate in another library
+ * is reported without its id or title, and a task this server did not start is
+ * reported only if the document it created is in the library (else undefined).
+ */
+export async function scopedTaskSummary(
+  api: PaperlessAPI,
+  task: any
+): Promise<TaskSummary | undefined> {
+  const summary = summarizeTask(task);
+  if (!(await api.scope())) return summary;
+  const dupIds = (summary.duplicate_of || []).map((d) => d.id);
+  const related = summary.document_id ?? null;
+  const visible = await api.documentsInScope(related === null ? dupIds : [...dupIds, related]);
+  const started = summary.task_id ? api.startedTask(summary.task_id) : false;
+  if (!started && !(summary.outcome === "created" && related !== null && visible.has(related))) {
+    return undefined;
+  }
+  if (summary.duplicate_of) {
+    const kept = summary.duplicate_of.filter((d) => visible.has(d.id));
+    if (kept.length < summary.duplicate_of.length) {
+      summary.duplicate_outside_library = true;
+      summary.result = kept.length
+        ? "Not consuming: it is a duplicate of a document already in Paperless."
+        : "Not consuming: it is a duplicate of a document in another library, which this server cannot show.";
+    }
+    summary.duplicate_of = kept;
+  }
+  return summary;
+}
+
 async function getTask(api: PaperlessAPI, taskId: string): Promise<any> {
   const res = await api.request(`/tasks/?task_id=${encodeURIComponent(taskId)}`);
   if (Array.isArray(res)) {
@@ -361,7 +402,10 @@ export async function waitForTask(
   const deadline = Date.now() + waitSeconds * 1000;
   for (;;) {
     const task = await getTask(api, taskId);
-    const summary = summarizeTask(task || { task_id: taskId, status: "pending" });
+    const summary = task
+      ? await scopedTaskSummary(api, task)
+      : summarizeTask({ task_id: taskId, status: "pending" });
+    if (!summary) return { task_id: taskId, status: "unknown" };
     if (summary.outcome !== "pending" || Date.now() + POLL_INTERVAL_MS > deadline) {
       return summary;
     }
@@ -476,10 +520,12 @@ export function registerUrlUploadTools(server: McpServer, api: PaperlessAPI) {
     READ_ONLY,
     async (args) => {
       const task = await getTask(api, args.task_id);
-      if (!task) {
+      // Same answer for another library's task as for a missing one.
+      const summary = task ? await scopedTaskSummary(api, task) : undefined;
+      if (!summary) {
         throw new Error(`No task with id ${args.task_id}`);
       }
-      return jsonResult(summarizeTask(task), true);
+      return jsonResult(summary, true);
     }
   );
 }

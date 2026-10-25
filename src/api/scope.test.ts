@@ -158,3 +158,11 @@ test("include and exclude together, or an upload type outside the scope, are ref
     /outside the library/
   );
 });
+
+test("an upload's consume task is remembered as this client's own", async () => {
+  const api = scoped();
+  assert.equal(api.startedTask("task-uuid"), false);
+  await api.postDocument(Buffer.from("%PDF"), "x.pdf");
+  assert.equal(api.startedTask("task-uuid"), true);
+  assert.equal(scoped().startedTask("task-uuid"), false);
+});
