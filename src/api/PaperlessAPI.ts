@@ -58,6 +58,25 @@ export interface PaperlessAPIOptions {
   uploadDocumentType?: string;
 }
 
+/** Taxonomy shared by every library in one Paperless. */
+export type TaxonomyKind = "tags" | "correspondents" | "custom_fields" | "storage_paths";
+
+const TAXONOMY_LABEL: Record<TaxonomyKind, string> = {
+  tags: "Tag",
+  correspondents: "Correspondent",
+  custom_fields: "Custom field",
+  storage_paths: "Storage path",
+};
+
+/** Per kind: object id -> how many of the library's documents use it (only those > 0). */
+export type TaxonomyUsage = Record<TaxonomyKind, Map<number, number>>;
+
+interface TaxonomyItem {
+  id: number;
+  document_count?: number;
+  children?: unknown[];
+}
+
 /** A resolved library scope: document type ids. */
 export interface Scope {
   include: number[] | null;
@@ -174,6 +193,115 @@ export class PaperlessAPI {
     }
   }
 
+  /**
+   * How the library's documents use the shared taxonomy, or null on an unscoped
+   * server. One selection_data call over the library's document ids, cached with
+   * the rest of the taxonomy.
+   */
+  async taxonomyUsage(): Promise<TaxonomyUsage | null> {
+    if (!(await this.scope())) return null;
+    return this.cached("usage", async () => {
+      const usage: TaxonomyUsage = {
+        tags: new Map(),
+        correspondents: new Map(),
+        custom_fields: new Map(),
+        storage_paths: new Map(),
+      };
+      const ids = (await this.getDocuments("?page_size=1&fields=id")).all || [];
+      if (!ids.length) return usage;
+      const sel = await this.raw<Record<string, Array<{ id: number; document_count: number }>>>(
+        "/documents/selection_data/",
+        { method: "POST", body: JSON.stringify({ documents: ids }) }
+      );
+      for (const kind of Object.keys(usage) as TaxonomyKind[]) {
+        for (const { id, document_count } of sel[`selected_${kind}`] || []) {
+          if (document_count > 0) usage[kind].set(id, document_count);
+        }
+      }
+      return usage;
+    });
+  }
+
+  /**
+   * A scoped library sees a taxonomy object when one of its documents uses it, or
+   * when no document uses it at all (just created). What only other libraries use
+   * stays hidden, names included.
+   */
+  private static visible(usage: TaxonomyUsage, kind: TaxonomyKind, item: TaxonomyItem): boolean {
+    return usage[kind].has(item.id) || !item.document_count;
+  }
+
+  /**
+   * The objects of a list the library may see, with document_count counting only
+   * the library's documents (and tag children narrowed the same way).
+   */
+  async scopeTaxonomy<T extends TaxonomyItem>(kind: TaxonomyKind, items: T[]): Promise<T[]> {
+    const usage = await this.taxonomyUsage();
+    if (!usage) return items;
+    let visibleIds: Set<number> | undefined;
+    if (kind === "tags" && items.some((t) => Array.isArray(t.children) && t.children.length)) {
+      const all = (await this.getTags()).results || [];
+      visibleIds = new Set(all.filter((t) => PaperlessAPI.visible(usage, kind, t)).map((t) => t.id));
+    }
+    return items
+      .filter((item) => PaperlessAPI.visible(usage, kind, item))
+      .map((item) => {
+        const out = { ...item, document_count: usage[kind].get(item.id) ?? 0 };
+        if (visibleIds && Array.isArray(item.children)) {
+          out.children = item.children.filter((c) => {
+            const id = typeof c === "number" ? c : (c as { id?: number })?.id;
+            return typeof id === "number" && visibleIds!.has(id);
+          });
+        }
+        return out;
+      });
+  }
+
+  private allTaxonomy(kind: TaxonomyKind): Promise<{ results?: TaxonomyItem[] }> {
+    switch (kind) {
+      case "tags":
+        return this.getTags();
+      case "correspondents":
+        return this.getCorrespondents();
+      case "custom_fields":
+        return this.getCustomFields();
+      case "storage_paths":
+        return this.cached("storage_paths", () => this.request(`/storage_paths/?${ALL}`));
+    }
+  }
+
+  /**
+   * Throws OutOfScopeError for any referenced taxonomy object the library cannot
+   * see, so an id cannot be attached to one of its documents to read the name back.
+   * A missing id gets the same answer as a hidden one.
+   */
+  async assertTaxonomyInScope(
+    refs: Partial<Record<TaxonomyKind, Array<number | null | undefined> | undefined>>
+  ): Promise<void> {
+    const kinds = (Object.keys(refs) as TaxonomyKind[]).filter((k) =>
+      (refs[k] || []).some((n) => typeof n === "number")
+    );
+    // Most writes reference no taxonomy: no extra Paperless call for them.
+    if (!kinds.length) return;
+    const usage = await this.taxonomyUsage();
+    if (!usage) return;
+    for (const kind of kinds) {
+      const wanted = [...new Set((refs[kind] || []).filter((n): n is number => typeof n === "number"))];
+      let all = (await this.allTaxonomy(kind)).results || [];
+      if (wanted.some((id) => !all.some((i) => i.id === id))) {
+        // Possibly created since the list was cached.
+        this.cache.delete(kind);
+        all = (await this.allTaxonomy(kind)).results || [];
+      }
+      for (const id of wanted) {
+        const item = all.find((i) => i.id === id);
+        if (!item || !PaperlessAPI.visible(usage, kind, item)) {
+          throw new OutOfScopeError(`${TAXONOMY_LABEL[kind]} ${id}`);
+        }
+      }
+    }
+  }
+
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     return {
       Authorization: `Token ${this.token}`,
@@ -286,6 +414,17 @@ export class PaperlessAPI {
   ): Promise<BulkEditDocumentsResult> {
     await this.assertInScope(documents);
     if (method === "set_document_type") await this.assertTypeInScope(parameters.document_type ?? null);
+    const p = parameters as Record<string, unknown>;
+    await this.assertTaxonomyInScope({
+      tags: method === "add_tag" ? [p.tag as number] : method === "modify_tags" ? (p.add_tags as number[]) : [],
+      correspondents: method === "set_correspondent" ? [p.correspondent as number] : [],
+      storage_paths: method === "set_storage_path" ? [p.storage_path as number] : [],
+      custom_fields:
+        method === "modify_custom_fields"
+          ? Object.keys((p.add_custom_fields as Record<string, unknown>) || {}).map(Number)
+          : [],
+    });
+    this.cache.delete("usage");
     return this.raw<BulkEditDocumentsResult>("/documents/bulk_edit/", {
       method: "POST",
       body: JSON.stringify({ documents, method, parameters }),
@@ -295,8 +434,17 @@ export class PaperlessAPI {
   async postDocument(
     document: Buffer,
     filename: string,
-    metadata: UploadMetadata = {}
+    metadata: UploadMetadata = {},
+    /** Tags the server itself adds (the uploader tag), exempt from the taxonomy scope. */
+    trustedTags: number[] = []
   ): Promise<string> {
+    await this.assertTaxonomyInScope({
+      tags: ((metadata.tags as number[]) || []).map(Number).filter((t) => !trustedTags.includes(t)),
+      correspondents: [metadata.correspondent as number | undefined].map((v) => (v === undefined ? v : Number(v))),
+      storage_paths: [metadata.storage_path as number | undefined].map((v) => (v === undefined ? v : Number(v))),
+      custom_fields: ((metadata.custom_fields as number[]) || []).map(Number),
+    });
+    this.cache.delete("usage");
     const scope = await this.scope();
     if (scope) {
       if (metadata.document_type === undefined && scope.uploadType !== null) {
@@ -358,6 +506,13 @@ export class PaperlessAPI {
   async updateDocument(id: number, data: Record<string, unknown>): Promise<Document> {
     await this.assertInScope([id]);
     if ("document_type" in data) await this.assertTypeInScope(data.document_type as number | null);
+    await this.assertTaxonomyInScope({
+      tags: data.tags as number[] | undefined,
+      correspondents: [data.correspondent as number | null | undefined],
+      storage_paths: [data.storage_path as number | null | undefined],
+      custom_fields: ((data.custom_fields as Array<{ field: number }> | undefined) || []).map((f) => f.field),
+    });
+    this.cache.delete("usage");
     return this.raw<Document>(`/documents/${id}/`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -410,6 +565,7 @@ export class PaperlessAPI {
   }
 
   async updateTag(id: number, data: Partial<Tag>): Promise<Tag> {
+    await this.assertTaxonomyInScope({ tags: [id] });
     this.invalidateTaxonomy();
     return this.request<Tag>(`/tags/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
   }

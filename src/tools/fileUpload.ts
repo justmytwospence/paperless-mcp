@@ -95,9 +95,10 @@ export function registerFileUploadTools(server: McpServer, api: PaperlessAPI, ro
       const name = path.basename(abs);
       const filename = deriveFilename(args.filename || name, "", "file:///" + name, body);
       const { path: _p, filename: _f, wait_seconds, ...metadata } = args;
-      metadata.tags = [...new Set([...(metadata.tags || []), await tagId(api, uploader)])];
+      const uploaderTag = await tagId(api, uploader);
+      metadata.tags = [...new Set([...(metadata.tags || []), uploaderTag])];
 
-      const response = await api.postDocument(body, filename, metadata);
+      const response = await api.postDocument(body, filename, metadata, [uploaderTag]);
       const result = {
         path: args.path,
         uploader,

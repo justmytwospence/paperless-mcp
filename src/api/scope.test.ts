@@ -4,10 +4,22 @@ import { OutOfScopeError, PaperlessAPI } from "./PaperlessAPI.js";
 
 // A stub Paperless behind fetch, so the real client (and its scope) is exercised.
 const DOCS = [
-  { id: 1, title: "Paper", document_type: 1 },
-  { id: 2, title: "Invoice", document_type: 17 },
-  { id: 3, title: "Untyped", document_type: null },
+  { id: 1, title: "Paper", document_type: 1, tags: [10, 13], correspondent: 20 },
+  { id: 2, title: "Invoice", document_type: 17, tags: [11, 13], correspondent: 21 },
+  { id: 3, title: "Untyped", document_type: null, tags: [] as number[], correspondent: null },
 ];
+// Tag 10: this library only; 11: the other library only; 12: unused; 13: both.
+const TAGS = [10, 11, 12, 13].map((id) => ({
+  id,
+  name: `tag-${id}`,
+  children: id === 13 ? [{ id: 10 }, { id: 11 }] : [],
+  document_count: DOCS.filter((d) => d.tags.includes(id)).length,
+}));
+const CORRESPONDENTS = [20, 21].map((id) => ({
+  id,
+  name: `corr-${id}`,
+  document_count: DOCS.filter((d) => d.correspondent === id).length,
+}));
 const TYPES = [
   { id: 1, name: "Academic" },
   { id: 17, name: "Invoice" },
@@ -35,8 +47,27 @@ beforeEach(() => {
       let docs = DOCS;
       if (inTypes) docs = docs.filter((d) => d.document_type !== null && inTypes.split(",").map(Number).includes(d.document_type));
       if (ids) docs = docs.filter((d) => ids.split(",").map(Number).includes(d.id));
-      return json({ count: docs.length, next: null, results: docs });
+      return json({ count: docs.length, next: null, all: docs.map((d) => d.id), results: docs });
     }
+    if (p === "/api/tags/") return json({ count: TAGS.length, next: null, results: TAGS });
+    if (p === "/api/correspondents/") return json({ count: CORRESPONDENTS.length, next: null, results: CORRESPONDENTS });
+    if (p === "/api/custom_fields/" || p === "/api/storage_paths/") return json({ count: 0, next: null, results: [] });
+    if (p === "/api/documents/selection_data/") {
+      const ids: number[] = JSON.parse(String(init.body)).documents;
+      const docs = DOCS.filter((d) => ids.includes(d.id));
+      return json({
+        selected_tags: TAGS.map((t) => ({ id: t.id, document_count: docs.filter((d) => d.tags.includes(t.id)).length })),
+        selected_correspondents: CORRESPONDENTS.map((c) => ({
+          id: c.id,
+          document_count: docs.filter((d) => d.correspondent === c.id).length,
+        })),
+        selected_custom_fields: [],
+        selected_storage_paths: [],
+        selected_document_types: [],
+      });
+    }
+    const tagPatch = p.match(/^\/api\/tags\/(\d+)\/$/);
+    if (tagPatch) return json(TAGS.find((t) => t.id === Number(tagPatch[1])));
     const m = p.match(/^\/api\/documents\/(\d+)\/(notes\/|download\/|thumb\/)?$/);
     if (m) {
       const doc = DOCS.find((d) => d.id === Number(m[1]));
@@ -165,4 +196,35 @@ test("an upload's consume task is remembered as this client's own", async () => 
   await api.postDocument(Buffer.from("%PDF"), "x.pdf");
   assert.equal(api.startedTask("task-uuid"), true);
   assert.equal(scoped().startedTask("task-uuid"), false);
+});
+
+test("taxonomy lists show what the library uses or nobody uses, counted for the library", async () => {
+  const api = scoped();
+  const tags = await api.scopeTaxonomy("tags", TAGS);
+  assert.deepEqual(tags.map((t) => [t.id, t.document_count]), [[10, 1], [12, 0], [13, 1]]);
+  assert.deepEqual(tags.find((t) => t.id === 13)!.children, [{ id: 10 }], "hidden children are dropped");
+  const corr = await api.scopeTaxonomy("correspondents", CORRESPONDENTS);
+  assert.deepEqual(corr.map((c) => c.id), [20]);
+  // Unscoped: untouched.
+  const all = await new PaperlessAPI("http://p.test", "t").scopeTaxonomy("tags", TAGS);
+  assert.equal(all.length, 4);
+});
+
+test("another library's taxonomy cannot be attached to a document or renamed", async () => {
+  const api = scoped();
+  await assert.rejects(api.updateDocument(1, { tags: [10, 11] }), /Tag 11 is not in this server's library/);
+  await assert.rejects(api.updateDocument(1, { tags: [99] }), /Tag 99 is not/, "a missing id looks the same");
+  await assert.rejects(api.updateDocument(1, { correspondent: 21 }), /Correspondent 21/);
+  await assert.rejects(api.bulkEditDocuments([1], "add_tag", { tag: 11 }), OutOfScopeError);
+  await assert.rejects(api.bulkEditDocuments([1], "modify_tags", { add_tags: [11], remove_tags: [] }), OutOfScopeError);
+  await assert.rejects(api.bulkEditDocuments([1], "set_correspondent", { correspondent: 21 }), OutOfScopeError);
+  await assert.rejects(api.postDocument(Buffer.from("%PDF"), "a.pdf", { tags: [11] }), OutOfScopeError);
+  await assert.rejects(api.updateTag(11, { name: "x" }), OutOfScopeError);
+  assert.ok(!calls.some((c) => c.method !== "GET" && c.url.pathname !== "/api/documents/selection_data/"));
+
+  await api.updateDocument(1, { tags: [10, 12, 13], correspondent: 20 });
+  await api.bulkEditDocuments([1], "remove_tag", { tag: 11 });
+  await api.updateTag(12, { name: "y" });
+  // The server's own uploader tag is exempt.
+  await api.postDocument(Buffer.from("%PDF"), "b.pdf", { tags: [11] }, [11]);
 });

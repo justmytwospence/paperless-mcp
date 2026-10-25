@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { PaperlessAPI, scopeAllows } from "../api/PaperlessAPI.js";
+import { PaperlessAPI, scopeAllows, type TaxonomyKind } from "../api/PaperlessAPI.js";
+import type { PaginationResponse } from "../api/types.js";
 import { enhanceMatchingAlgorithm, enhanceMatchingAlgorithmArray } from "../api/utils.js";
 import { matchingAlgorithmSchema } from "./utils/matchingAlgorithm.js";
 import { buildQueryString } from "./utils/queryString.js";
@@ -24,6 +25,48 @@ const color = z
   .regex(/^#[0-9A-Fa-f]{6}$/)
   .optional();
 
+type TaxonomyList<T> = Omit<PaginationResponse<T>, "next" | "previous"> & {
+  next: string | number | null;
+  previous: string | number | null;
+};
+
+const SCOPE_NOTE =
+  " On a library server: only what the library's documents use (plus anything no document uses yet), and document_count counts the library's documents.";
+
+// Paperless's own default page size.
+const DEFAULT_PAGE_SIZE = 25;
+
+/**
+ * Lists one kind of taxonomy. A scoped server fetches the whole (filtered,
+ * ordered) list, keeps what its library may see, and pages that itself, so
+ * count, all and the pages describe the library rather than the whole Paperless.
+ * next/previous are then page numbers rather than URLs.
+ */
+async function listTaxonomy<T extends { id: number; document_count?: number }>(
+  api: PaperlessAPI,
+  kind: TaxonomyKind | "document_types",
+  fetch: (query?: string) => Promise<PaginationResponse<T>>,
+  args: Record<string, unknown>
+): Promise<TaxonomyList<T>> {
+  const scope = await api.scope();
+  if (!scope) return fetch(buildQueryString(args) || undefined);
+  const { page, page_size, ...filters } = args as { page?: number; page_size?: number };
+  const res = await fetch(buildQueryString({ ...filters, page_size: 100000 }));
+  const items =
+    kind === "document_types"
+      ? (res.results || []).filter((t) => scopeAllows(scope, t.id))
+      : await api.scopeTaxonomy(kind, res.results || []);
+  const size = Math.max(1, page_size ?? DEFAULT_PAGE_SIZE);
+  const n = Math.max(1, page ?? 1);
+  return {
+    count: items.length,
+    next: n * size < items.length ? n + 1 : null,
+    previous: n > 1 ? n - 1 : null,
+    all: items.map((i) => i.id),
+    results: items.slice((n - 1) * size, n * size),
+  };
+}
+
 // Taxonomy is add-and-rename only: deleting a tag, correspondent or type strips it
 // from every document, so this server does not offer it.
 export function registerTaxonomyTools(
@@ -34,11 +77,11 @@ export function registerTaxonomyTools(
   registerTool(
     server,
     "list_tags",
-    "List tags (id, name, color, matching rule, document_count)." + CACHE_HINT,
+    "List tags (id, name, color, matching rule, document_count)." + SCOPE_NOTE + CACHE_HINT,
     LIST_SHAPE,
     READ_ONLY,
     async (args) => {
-      const res = await api.getTags(buildQueryString(args) || undefined);
+      const res = await listTaxonomy(api, "tags", (q) => api.getTags(q), args);
       return jsonResult({ ...res, results: enhanceMatchingAlgorithmArray(res.results || []) });
     }
   );
@@ -76,11 +119,12 @@ export function registerTaxonomyTools(
     server,
     "list_correspondents",
     "List correspondents: the people and organisations documents come from (for papers, usually the publisher or journal)." +
+      SCOPE_NOTE +
       CACHE_HINT,
     LIST_SHAPE,
     READ_ONLY,
     async (args) => {
-      const res = await api.getCorrespondents(buildQueryString(args) || undefined);
+      const res = await listTaxonomy(api, "correspondents", (q) => api.getCorrespondents(q), args);
       return jsonResult({ ...res, results: enhanceMatchingAlgorithmArray(res.results || []) });
     }
   );
@@ -105,14 +149,8 @@ export function registerTaxonomyTools(
     LIST_SHAPE,
     READ_ONLY,
     async (args) => {
-      const res = await api.getDocumentTypes(buildQueryString(args) || undefined);
-      const scope = await api.scope();
-      const results = (res.results || []).filter((t) => scopeAllows(scope, t.id));
-      return jsonResult({
-        ...res,
-        ...(scope ? { count: results.length, next: null, previous: null } : {}),
-        results: enhanceMatchingAlgorithmArray(results),
-      });
+      const res = await listTaxonomy(api, "document_types", (q) => api.getDocumentTypes(q), args);
+      return jsonResult({ ...res, results: enhanceMatchingAlgorithmArray(res.results || []) });
     }
   );
 
@@ -137,9 +175,10 @@ export function registerTaxonomyTools(
     "list_custom_fields",
     "List custom fields (id, name, data_type, and for select fields the option labels in extra_data). " +
       "Use the ids with update_document, bulk_edit_documents and custom_field_query." +
+      SCOPE_NOTE +
       CACHE_HINT,
     LIST_SHAPE,
     READ_ONLY,
-    async (args) => jsonResult(await api.getCustomFields(buildQueryString(args) || undefined))
+    async (args) => jsonResult(await listTaxonomy(api, "custom_fields", (q) => api.getCustomFields(q), args))
   );
 }
