@@ -57,6 +57,7 @@ changes.
 | `MCP_TRANSPORT` | `stdio` | `http` for Streamable HTTP (the image default) |
 | `PORT` | `8000` | HTTP port; `/mcp` and `/health` |
 | `MCP_ALLOWED_HOSTS` | any | Host header allowlist (DNS-rebinding protection) |
+| `PAPERLESS_MCP_DOCUMENT_TYPES` | unset (all) | Confine the server to these document types (comma-separated names or ids); see below |
 | `PAPERLESS_MCP_DATA_DIR` | unset (`/data` in the image) | Enables semantic search |
 | `PAPERLESS_MCP_SYNC_INTERVAL_MINUTES` | `10` | Incremental sync interval |
 | `PAPERLESS_MCP_RECONCILE_INTERVAL_MINUTES` | `60` | Full reconcile interval |
@@ -64,6 +65,16 @@ changes.
 | `PAPERLESS_MCP_CHUNK_TOKENS` / `_CHUNK_OVERLAP_TOKENS` | `480` / `64` | Chunk size; changing it applies to documents as they are re-indexed |
 | `PAPERLESS_MCP_UPLOAD_ROOT` | unset | Enables `post_document_from_file`: a folder with one `agent-<name>/` subfolder per agent |
 | `PAPERLESS_MCP_MAX_FILE_BYTES` | 100 MB | Upload size cap |
+
+### One library per server
+
+`PAPERLESS_MCP_DOCUMENT_TYPES=Academic` makes a server see only documents of that
+type: searches, lists, reads, notes, edits and downloads are limited to it, and a
+document of another type answers exactly like one that does not exist. Edits cannot
+change a document to another type, uploads are filed as the scope's type (when it is a
+single type), and the semantic index holds only those documents. Run a second server
+with a different scope against the same Paperless for a separate library. Tags,
+correspondents and custom fields are shared by Paperless and stay visible.
 
 The HTTP transport does not authenticate requests. Run it behind a proxy that does,
 on a network only that proxy can reach.

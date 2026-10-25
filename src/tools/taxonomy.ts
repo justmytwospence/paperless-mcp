@@ -26,7 +26,11 @@ const color = z
 
 // Taxonomy is add-and-rename only: deleting a tag, correspondent or type strips it
 // from every document, so this server does not offer it.
-export function registerTaxonomyTools(server: McpServer, api: PaperlessAPI) {
+export function registerTaxonomyTools(
+  server: McpServer,
+  api: PaperlessAPI,
+  opts: { scoped?: boolean } = {}
+) {
   registerTool(
     server,
     "list_tags",
@@ -97,27 +101,36 @@ export function registerTaxonomyTools(server: McpServer, api: PaperlessAPI) {
   registerTool(
     server,
     "list_document_types",
-    "List document types (e.g. Paper, Book, Invoice)." + CACHE_HINT,
+    "List document types (e.g. Paper, Book, Invoice); on a scoped server, only its own." + CACHE_HINT,
     LIST_SHAPE,
     READ_ONLY,
     async (args) => {
       const res = await api.getDocumentTypes(buildQueryString(args) || undefined);
-      return jsonResult({ ...res, results: enhanceMatchingAlgorithmArray(res.results || []) });
+      const scope = await api.scopeTypeIds();
+      const results = (res.results || []).filter((t) => !scope || scope.includes(t.id));
+      return jsonResult({
+        ...res,
+        ...(scope ? { count: results.length, next: null, previous: null } : {}),
+        results: enhanceMatchingAlgorithmArray(results),
+      });
     }
   );
 
-  registerTool(
-    server,
-    "create_document_type",
-    "Create a document type, optionally with an automatic matching rule.",
-    {
-      name: z.string(),
-      match: z.string().optional(),
-      matching_algorithm: matchingAlgorithmSchema.optional(),
-    },
-    WRITE,
-    async (args) => jsonResult(enhanceMatchingAlgorithm(await api.createDocumentType(args)))
-  );
+  // A scoped server cannot use a new type: it would be outside its own scope.
+  if (!opts.scoped) {
+    registerTool(
+      server,
+      "create_document_type",
+      "Create a document type, optionally with an automatic matching rule.",
+      {
+        name: z.string(),
+        match: z.string().optional(),
+        matching_algorithm: matchingAlgorithmSchema.optional(),
+      },
+      WRITE,
+      async (args) => jsonResult(enhanceMatchingAlgorithm(await api.createDocumentType(args)))
+    );
+  }
 
   registerTool(
     server,

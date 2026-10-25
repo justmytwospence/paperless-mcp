@@ -7,7 +7,9 @@ context, and each `src/tools/*.ts` registers its tools.
 
 ## Layout
 
-- `src/api/PaperlessAPI.ts`: the only code that talks to Paperless (fetch). Taxonomy getters
+- `src/api/PaperlessAPI.ts`: the only code that talks to Paperless (fetch). It also
+  enforces the document-type scope (`PAPERLESS_MCP_DOCUMENT_TYPES`): every document path
+  goes through its scoped methods, and `request()` refuses `/documents` paths. Taxonomy getters
   without a query string return everything and are cached for 60 s.
 - `src/tools/`: tool registration through `tools/utils/register.ts` (`registerTool`, with
   `READ_ONLY`/`WRITE`/`OPEN_WRITE`/`DESTRUCTIVE` annotations). `semanticSearch.ts` exists only

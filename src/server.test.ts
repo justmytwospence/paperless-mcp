@@ -31,9 +31,9 @@ const CORE = [
   "update_tag",
 ];
 
-async function toolNames(search?: Promise<SemanticSearch>) {
+async function toolNames(search?: Promise<SemanticSearch>, scoped = false) {
   let names: string[] = [];
-  await withServer(createServerFactory({ api, publicUrl: "http://p.test", search })(), async (client) => {
+  await withServer(createServerFactory({ api, publicUrl: "http://p.test", search, scoped })(), async (client) => {
     names = (await client.listTools()).tools.map((t) => t.name).sort();
   });
   return names;
@@ -54,4 +54,9 @@ test("nothing that deletes documents or taxonomy is offered", async () => {
     names.filter((n) => n.startsWith("delete_")),
     ["delete_document_note"]
   );
+});
+
+test("a scoped server cannot create document types", async () => {
+  const names = await toolNames(undefined, true);
+  assert.deepEqual(names, CORE.filter((n) => n !== "create_document_type"));
 });

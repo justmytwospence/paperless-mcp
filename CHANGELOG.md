@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.1.0
+
+- `PAPERLESS_MCP_DOCUMENT_TYPES` confines the server to some document types (names or
+  ids), so one Paperless can back several MCP servers with separate libraries. Every
+  list, search, read, note, edit and download is limited to those types (anything
+  else answers as not found); edits cannot move a document out of them; uploads are
+  filed as the scope's type when there is one; the semantic index holds only them;
+  and `create_document_type` is not offered.
+
 ## 3.0.1
 
 - Image: make the bundled model readable by the `node` user. On GitHub's builder its

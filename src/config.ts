@@ -19,6 +19,13 @@ export const PAPERLESS_PUBLIC_URL = (process.env.PAPERLESS_PUBLIC_URL || PAPERLE
   ""
 );
 
+// Confine the server to these document types (comma-separated names or ids),
+// e.g. "Academic". Unset: the whole library.
+export const DOCUMENT_TYPES = (process.env.PAPERLESS_MCP_DOCUMENT_TYPES || "")
+  .split(",")
+  .map((t) => t.trim())
+  .filter(Boolean);
+
 export const MAX_FILE_SIZE_BYTES = int("PAPERLESS_MCP_MAX_FILE_BYTES", 100 * 1024 * 1024);
 export const UPLOAD_ROOT = process.env.PAPERLESS_MCP_UPLOAD_ROOT || "";
 

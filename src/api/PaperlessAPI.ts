@@ -39,14 +39,78 @@ export type UploadMetadata = Record<
 const ALL = "page_size=100000";
 const TAXONOMY_TTL_MS = 60_000;
 
+export class OutOfScopeError extends PaperlessError {
+  constructor(what: string) {
+    super(`${what} is not in this server's library.`, 404);
+  }
+}
+
+export interface PaperlessAPIOptions {
+  /**
+   * Document types (names or ids) this server may see. Empty means every document.
+   * Every document read, search, edit and upload is confined to them, so one
+   * Paperless can back several MCP servers with separate libraries.
+   */
+  documentTypes?: string[];
+}
+
 export class PaperlessAPI {
   private readonly apiVersion = process.env.PAPERLESS_API_VERSION || "9";
   private readonly cache = new Map<string, { at: number; value: Promise<unknown> }>();
+  private scopePromise?: Promise<number[] | null>;
 
   constructor(
     private readonly baseUrl: string,
-    private readonly token: string
+    private readonly token: string,
+    private readonly options: PaperlessAPIOptions = {}
   ) {}
+
+  /** The document type ids in scope, or null for no restriction. Resolved once. */
+  scopeTypeIds(): Promise<number[] | null> {
+    const wanted = (this.options.documentTypes || []).map((t) => t.trim()).filter(Boolean);
+    if (!wanted.length) return Promise.resolve(null);
+    this.scopePromise ??= (async () => {
+      const all = await this.request<GetDocumentTypesResponse>(`/document_types/?${ALL}`);
+      const ids = wanted.map((w) => {
+        const hit = (all.results || []).find(
+          (t) => String(t.id) === w || t.name.toLowerCase() === w.toLowerCase()
+        );
+        if (!hit) throw new Error(`PAPERLESS_MCP_DOCUMENT_TYPES: no document type "${w}" in Paperless`);
+        return hit.id;
+      });
+      return [...new Set(ids)];
+    })();
+    this.scopePromise.catch(() => (this.scopePromise = undefined));
+    return this.scopePromise;
+  }
+
+  private async scopeQuery(): Promise<string> {
+    const ids = await this.scopeTypeIds();
+    return ids ? `document_type__id__in=${ids.join(",")}` : "";
+  }
+
+  /** Throws OutOfScopeError unless every document is in scope (and exists). */
+  async assertInScope(ids: number[]): Promise<void> {
+    const scope = await this.scopeTypeIds();
+    if (!scope || !ids.length) return;
+    const unique = [...new Set(ids)];
+    const res = await this.getDocuments(
+      `?id__in=${unique.join(",")}&fields=id&page_size=${unique.length}`
+    );
+    const found = new Set((res.results || []).map((d) => d.id));
+    const missing = unique.filter((id) => !found.has(id));
+    if (missing.length) throw new OutOfScopeError(`Document ${missing.join(", ")}`);
+  }
+
+  /** Throws unless a document type id (to assign) is in scope; null is allowed only without a scope. */
+  async assertTypeInScope(typeId: number | null | undefined): Promise<void> {
+    if (typeId === undefined) return;
+    const scope = await this.scopeTypeIds();
+    if (!scope) return;
+    if (typeId === null || !scope.includes(typeId)) {
+      throw new OutOfScopeError(`Document type ${typeId}`);
+    }
+  }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     return {
@@ -66,6 +130,10 @@ export class PaperlessAPI {
       );
     }
     const text = await res.text().catch(() => "");
+    if (res.status === 404 && /\/documents\/\d+/.test(url)) {
+      // Same answer as an out-of-scope document, so scope cannot be probed.
+      throw new OutOfScopeError(`Document ${url.match(/\/documents\/(\d+)/)![1]}`);
+    }
     let body: unknown = text;
     try {
       body = JSON.parse(text);
@@ -80,7 +148,18 @@ export class PaperlessAPI {
     throw new PaperlessError(String(message), res.status, body);
   }
 
+  /**
+   * Raw API access for everything except documents, which must go through the
+   * scoped methods below.
+   */
   async request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+    if (/^\/documents(\/|\?|$)/.test(path)) {
+      throw new Error(`request(): use the document methods for ${path}`);
+    }
+    return this.raw<T>(path, options);
+  }
+
+  private async raw<T = any>(path: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseUrl}/api${path}`;
     const method = options.method || "GET";
     const isJson = !options.body || typeof options.body === "string";
@@ -143,7 +222,9 @@ export class PaperlessAPI {
     method: string,
     parameters: BulkEditParameters = {}
   ): Promise<BulkEditDocumentsResult> {
-    return this.request<BulkEditDocumentsResult>("/documents/bulk_edit/", {
+    await this.assertInScope(documents);
+    if (method === "set_document_type") await this.assertTypeInScope(parameters.document_type ?? null);
+    return this.raw<BulkEditDocumentsResult>("/documents/bulk_edit/", {
       method: "POST",
       body: JSON.stringify({ documents, method, parameters }),
     });
@@ -154,6 +235,15 @@ export class PaperlessAPI {
     filename: string,
     metadata: UploadMetadata = {}
   ): Promise<string> {
+    const scope = await this.scopeTypeIds();
+    if (scope) {
+      if (metadata.document_type === undefined && scope.length === 1) {
+        metadata = { ...metadata, document_type: scope[0] };
+      }
+      await this.assertTypeInScope(
+        metadata.document_type === undefined ? null : Number(metadata.document_type)
+      );
+    }
     const form = new FormData();
     form.append("document", new Blob([new Uint8Array(document)]), filename);
     for (const key of ["title", "created", "correspondent", "document_type", "storage_path"]) {
@@ -185,43 +275,59 @@ export class PaperlessAPI {
   }
 
   async getDocuments(query = ""): Promise<DocumentsResponse> {
-    return this.request<DocumentsResponse>(`/documents/${query}`);
+    // Appended last: Django reads the last value of a repeated parameter, so a
+    // caller's own document_type__id__in cannot widen the scope.
+    const scope = await this.scopeQuery();
+    const q = scope ? (query ? `${query}&${scope}` : `?${scope}`) : query;
+    return this.raw<DocumentsResponse>(`/documents/${q}`);
   }
 
   async getDocument(id: number): Promise<Document> {
-    return this.request<Document>(`/documents/${id}/`);
+    const doc = await this.raw<Document>(`/documents/${id}/`);
+    const scope = await this.scopeTypeIds();
+    if (scope && (doc.document_type === null || !scope.includes(doc.document_type))) {
+      throw new OutOfScopeError(`Document ${id}`);
+    }
+    return doc;
   }
 
   async updateDocument(id: number, data: Record<string, unknown>): Promise<Document> {
-    return this.request<Document>(`/documents/${id}/`, {
+    await this.assertInScope([id]);
+    if ("document_type" in data) await this.assertTypeInScope(data.document_type as number | null);
+    return this.raw<Document>(`/documents/${id}/`, {
       method: "PATCH",
       body: JSON.stringify(data),
     });
   }
 
   async downloadDocument(id: number, asOriginal = false): Promise<BinaryResponse> {
+    await this.assertInScope([id]);
     return this.binary(`/documents/${id}/download/${asOriginal ? "?original=true" : ""}`);
   }
 
   async getThumbnail(id: number): Promise<BinaryResponse> {
+    await this.assertInScope([id]);
     return this.binary(`/documents/${id}/thumb/`);
   }
 
   // Notes
 
   async getDocumentNotes(documentId: number): Promise<Note[]> {
-    return this.request<Note[]>(`/documents/${documentId}/notes/`);
+    await this.assertInScope([documentId]);
+    return this.raw<Note[]>(`/documents/${documentId}/notes/`);
   }
 
   async createDocumentNote(documentId: number, note: string): Promise<Note[]> {
-    return this.request<Note[]>(`/documents/${documentId}/notes/`, {
+    await this.assertInScope([documentId]);
+    return this.raw<Note[]>(`/documents/${documentId}/notes/`, {
       method: "POST",
       body: JSON.stringify({ note }),
     });
   }
 
   async deleteDocumentNote(documentId: number, noteId: number): Promise<Note[]> {
-    return this.request<Note[]>(`/documents/${documentId}/notes/?id=${noteId}`, {
+    await this.assertInScope([documentId]);
+    return this.raw<Note[]>(`/documents/${documentId}/notes/?id=${noteId}`, {
       method: "DELETE",
     });
   }

@@ -25,7 +25,15 @@ if (!config.PAPERLESS_URL || !config.PAPERLESS_API_KEY) {
 }
 
 setPublicUrl(config.PAPERLESS_PUBLIC_URL);
-const api = new PaperlessAPI(config.PAPERLESS_URL, config.PAPERLESS_API_KEY);
+const api = new PaperlessAPI(config.PAPERLESS_URL, config.PAPERLESS_API_KEY, {
+  documentTypes: config.DOCUMENT_TYPES,
+});
+if (config.DOCUMENT_TYPES.length) {
+  api
+    .scopeTypeIds()
+    .then((ids) => console.error(`scope: document types ${config.DOCUMENT_TYPES.join(", ")} (ids ${ids})`))
+    .catch((err) => console.error("scope:", err.message));
+}
 
 let syncer: Syncer | undefined;
 let search: Promise<SemanticSearch> | undefined;
@@ -52,7 +60,12 @@ if (config.DATA_DIR) {
   search.catch((err) => console.error("semantic search unavailable:", err));
 }
 
-const createServer = createServerFactory({ api, publicUrl: config.PAPERLESS_PUBLIC_URL, search });
+const createServer = createServerFactory({
+  api,
+  publicUrl: config.PAPERLESS_PUBLIC_URL,
+  search,
+  scoped: config.DOCUMENT_TYPES.length > 0,
+});
 const transport = (process.env.MCP_TRANSPORT ?? "stdio").toLowerCase();
 
 if (transport === "stdio") {
