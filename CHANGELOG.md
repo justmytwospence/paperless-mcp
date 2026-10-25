@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.2.1
+
+- `post_document_from_file`'s description no longer names particular agents or paths;
+  it tells agents to use the folder their own instructions give.
+
 ## 3.2.0
 
 - Libraries: `PAPERLESS_MCP_LIBRARIES` (a JSON file or inline JSON) defines several

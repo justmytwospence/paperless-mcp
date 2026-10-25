@@ -23,7 +23,7 @@ export function resolveUpload(root: string, rel: string): { abs: string; uploade
     rel.includes("\0") ||
     rel.split(/[\\/]/).includes("..")
   ) {
-    throw new Error("path must be relative to the upload folder, e.g. 'agent-hermes/report.pdf'.");
+    throw new Error("path must be relative to the upload folder, e.g. 'agent-alice/report.pdf'.");
   }
   const rootReal = fs.realpathSync(root);
   const abs = fs.realpathSync(path.resolve(rootReal, rel));
@@ -67,18 +67,17 @@ export function registerFileUploadTools(server: McpServer, api: PaperlessAPI, ro
     server,
     "post_document_from_file",
     "Add a document to Paperless from a file you already have (downloaded, generated, or an attachment). " +
-      "First save the file into your own folder in the shared upload area -- the path your instructions " +
-      "give (e.g. Hermes: /opt/data/paperless-inbox/, NanoClaw: /workspace/extra/paperless-inbox/) -- then call " +
-      "this with 'path' relative to the upload area, i.e. '<your agent folder>/<file name>' such as " +
-      "'agent-hermes/invoice.pdf'. For documents on the web use post_document_from_url instead. " +
-      "The document is tagged with your agent folder's name. Set 'title' (and other " +
+      "First save the file into your own folder in this server's upload area (your instructions say where " +
+      "that folder is mounted for you), then call this with 'path' relative to the upload area: " +
+      "'<your agent folder>/<file name>', e.g. 'agent-alice/invoice.pdf'. For documents on the web use " +
+      "post_document_from_url instead. The document is tagged with your agent folder's name. Set 'title' (and other " +
       "metadata) if you know it. Waits for Paperless to consume the file (default 30s) and reports " +
       "'created' with document_id and web_url, 'duplicate' with the existing document, 'failed', or " +
       "'pending' (check later with get_task_status). You may delete your copy afterwards.",
     {
       path: z
         .string()
-        .describe("Path relative to the upload area: '<agent folder>/<file>', e.g. 'agent-hermes/report.pdf'."),
+        .describe("Path relative to the upload area: '<agent folder>/<file>', e.g. 'agent-alice/report.pdf'."),
       filename: z
         .string()
         .optional()
