@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 import { PaperlessAPI } from "../api/PaperlessAPI.js";
 import { CustomField } from "../api/types.js";
-import { buildBulkEditParameters, registerDocumentTools } from "./documents.js";
+import { buildBulkEditParameters, parsePageList, registerDocumentTools } from "./documents.js";
 import type { Client } from "@modelcontextprotocol/client";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { parseToolText, withClient } from "../test/mcp.js";
@@ -649,4 +649,40 @@ describe("nullable foreign keys can still be cleared (#138)", () => {
     assert.equal(data.owner, null);
   });
 
+});
+
+describe("bulk_edit_documents delete_pages", () => {
+  test("parsePageList accepts single pages, ranges and JSON lists", () => {
+    assert.deepEqual(parsePageList("2"), [2]);
+    assert.deepEqual(parsePageList(" 4-6, 2 "), [2, 4, 5, 6]);
+    assert.deepEqual(parsePageList("[3, 1]"), [1, 3]);
+    for (const bad of ["", "0", "3-1", "a", "[]", "[0]", "1,,2"]) {
+      assert.throws(() => parsePageList(bad), /Invalid pages/, bad);
+    }
+  });
+
+  test("sends pages to Paperless as a list of integers", async () => {
+    const { api, calls } = createDocumentApi([]);
+    await withDocumentClient(api, async (client) => {
+      const result = (await client.callTool({
+        name: "bulk_edit_documents",
+        arguments: { documents: [7], method: "delete_pages", pages: "2,4-5", confirm: true },
+      })) as CallToolResult;
+      assert.ok(!result.isError, parseToolText(result)?.error);
+    });
+    const [, method, parameters] = calls.bulkEditDocuments[0];
+    assert.equal(method, "delete_pages");
+    assert.deepEqual((parameters as any).pages, [2, 4, 5]);
+  });
+
+  test("leaves split's page groups as the string Paperless expects", async () => {
+    const { api, calls } = createDocumentApi([]);
+    await withDocumentClient(api, async (client) => {
+      await client.callTool({
+        name: "bulk_edit_documents",
+        arguments: { documents: [7], method: "split", pages: "1-2,3" },
+      });
+    });
+    assert.equal((calls.bulkEditDocuments[0][2] as any).pages, "1-2,3");
+  });
 });

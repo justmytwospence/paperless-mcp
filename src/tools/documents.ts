@@ -86,6 +86,41 @@ export function buildBulkEditParameters<T extends Record<string, unknown>>(
   return apiParameters;
 }
 
+/**
+ * Parses a page list for delete_pages, which Paperless takes as a list of page
+ * numbers (split, by contrast, takes the string itself). Accepts "2", "2,4-6"
+ * and a JSON list such as "[2, 4]".
+ */
+export function parsePageList(pages: string): number[] {
+  const text = pages.trim();
+  const invalid = () =>
+    new Error(`Invalid pages "${pages}": use page numbers and ranges, e.g. "2" or "2,4-6".`);
+  if (text.startsWith("[")) {
+    let list: unknown;
+    try {
+      list = JSON.parse(text);
+    } catch {
+      throw invalid();
+    }
+    if (!Array.isArray(list) || !list.length || !list.every((n) => Number.isInteger(n) && n >= 1)) {
+      throw invalid();
+    }
+    return [...new Set(list as number[])].sort((a, b) => a - b);
+  }
+  const out = new Set<number>();
+  for (const group of text.split(",")) {
+    const m = group.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+    if (!m) throw invalid();
+    const first = Number(m[1]);
+    const last = m[2] === undefined ? first : Number(m[2]);
+    // Bounded so a typo cannot build an enormous list.
+    if (first < 1 || last < first || last - first > 10_000) throw invalid();
+    for (let p = first; p <= last; p++) out.add(p);
+  }
+  if (!out.size) throw invalid();
+  return [...out].sort((a, b) => a - b);
+}
+
 async function executeDocumentQuery(
   api: PaperlessAPI,
   args: BuildDocumentQueryArgs
@@ -181,7 +216,12 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
         ),
       metadata_document_id: z.number().optional(),
       delete_originals: z.boolean().optional(),
-      pages: z.string().optional(),
+      pages: z
+        .string()
+        .optional()
+        .describe(
+          "For split: page groups, one new document per group, e.g. '1-2,3-5'. For delete_pages: the pages to remove, e.g. '2' or '2,4-6'."
+        ),
       degrees: z.number().optional(),
       confirm: z
         .boolean()
@@ -207,6 +247,10 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
         );
       }
       const { documents, method, add_custom_fields, confirm, ...parameters } = args;
+      if (method === "delete_pages") {
+        if (!args.pages) throw new Error("delete_pages needs pages, e.g. '2' or '2,4-6'.");
+        (parameters as Record<string, unknown>).pages = parsePageList(args.pages);
+      }
       if (method === "set_permissions") {
         // Paperless rejects (Paperless <= 3.0.5: crashes with a 500 on) a missing
         // set_permissions key even for owner-only changes.
