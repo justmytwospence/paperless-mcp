@@ -57,24 +57,65 @@ changes.
 | `MCP_TRANSPORT` | `stdio` | `http` for Streamable HTTP (the image default) |
 | `PORT` | `8000` | HTTP port; `/mcp` and `/health` |
 | `MCP_ALLOWED_HOSTS` | any | Host header allowlist (DNS-rebinding protection) |
-| `PAPERLESS_MCP_DOCUMENT_TYPES` | unset (all) | Confine the server to these document types (comma-separated names or ids); see below |
+| `PAPERLESS_MCP_LIBRARIES` | unset | Several libraries: a JSON file path or inline JSON (see Libraries) |
+| `PAPERLESS_MCP_DOCUMENT_TYPES` / `_EXCLUDE_DOCUMENT_TYPES` / `_UPLOAD_DOCUMENT_TYPE` | unset | The single library's scope (see Libraries) |
 | `PAPERLESS_MCP_DATA_DIR` | unset (`/data` in the image) | Enables semantic search |
 | `PAPERLESS_MCP_SYNC_INTERVAL_MINUTES` | `10` | Incremental sync interval |
 | `PAPERLESS_MCP_RECONCILE_INTERVAL_MINUTES` | `60` | Full reconcile interval |
 | `PAPERLESS_MCP_EMBED_THREADS` | `1` | ONNX intra-op threads |
 | `PAPERLESS_MCP_CHUNK_TOKENS` / `_CHUNK_OVERLAP_TOKENS` | `480` / `64` | Chunk size; changing it applies to documents as they are re-indexed |
-| `PAPERLESS_MCP_UPLOAD_ROOT` | unset | Enables `post_document_from_file`: a folder with one `agent-<name>/` subfolder per agent |
+| `PAPERLESS_MCP_UPLOAD_ROOT` | unset | Single library: enables `post_document_from_file`, a folder with one `agent-<name>/` subfolder per agent |
 | `PAPERLESS_MCP_MAX_FILE_BYTES` | 100 MB | Upload size cap |
 
-### One library per server
+### Libraries
 
-`PAPERLESS_MCP_DOCUMENT_TYPES=Academic` makes a server see only documents of that
-type: searches, lists, reads, notes, edits and downloads are limited to it, and a
-document of another type answers exactly like one that does not exist. Edits cannot
-change a document to another type, uploads are filed as the scope's type (when it is a
-single type), and the semantic index holds only those documents. Run a second server
-with a different scope against the same Paperless for a separate library. Tags,
-correspondents and custom fields are shared by Paperless and stay visible.
+A library is one MCP endpoint over part of Paperless, chosen by document type. Agents
+connected to a library see only its documents: searches, lists, reads, notes, edits
+and downloads are confined to it, a document outside it answers exactly like one that
+does not exist, edits cannot move a document out of it, uploads are filed into it, and
+its semantic index holds only its documents. Tags, correspondents and custom fields
+are shared by Paperless and stay visible.
+
+For one library, use environment variables: `PAPERLESS_MCP_DOCUMENT_TYPES=Invoice,Receipt`
+(only these), or `PAPERLESS_MCP_EXCLUDE_DOCUMENT_TYPES=Invoice` (everything else,
+untyped documents included), and optionally `PAPERLESS_MCP_UPLOAD_DOCUMENT_TYPE` for
+uploads that name no type (default: the only included type, if there is one). It is
+served at `/mcp`. With neither set, the server sees all of Paperless.
+
+For several, point `PAPERLESS_MCP_LIBRARIES` at a JSON file (or give the JSON inline).
+One process then serves each library at `/<name>/mcp`, with one copy of the model:
+
+```json
+{
+  "libraries": [
+    {
+      "name": "research",
+      "description": "academic papers and preprints",
+      "document_types": ["Paper"],
+      "upload_root": "/uploads/research"
+    },
+    {
+      "name": "household",
+      "description": "bills, contracts and other household paperwork",
+      "exclude_document_types": ["Paper"],
+      "upload_document_type": "Paperwork",
+      "upload_root": "/uploads/household",
+      "semantic_search": true
+    }
+  ]
+}
+```
+
+| Field | | |
+|---|---|---|
+| `name` | required | URL segment, lowercase letters, digits, dashes |
+| `description` | | One line agents read in the server instructions |
+| `document_types` / `exclude_document_types` | one or neither | Names or ids |
+| `upload_document_type` | | Type for uploads that name none |
+| `upload_root` | | Enables `post_document_from_file` for this library |
+| `semantic_search` | `true` | Index in `PAPERLESS_MCP_DATA_DIR/<name>` (needs a data dir) |
+
+Over stdio, the server serves one library: `PAPERLESS_MCP_LIBRARY`, or the first.
 
 The HTTP transport does not authenticate requests. Run it behind a proxy that does,
 on a network only that proxy can reach.

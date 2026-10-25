@@ -16,6 +16,9 @@ export const VERSION: string = createRequire(import.meta.url)("../package.json")
 export interface ServerContext {
   api: PaperlessAPI;
   publicUrl: string;
+  /** The library's name and what it holds, for the instructions agents read. */
+  library?: { name: string; description?: string };
+  uploadRoot?: string;
   /** Present when semantic search is enabled; resolves once the model is loaded. */
   search?: Promise<SemanticSearch>;
   /** Confined to some document types (PAPERLESS_MCP_DOCUMENT_TYPES). */
@@ -31,7 +34,7 @@ export function createServerFactory(ctx: ServerContext): () => McpServer {
   return () => {
     const server = new McpServer(
       { name: SERVER_NAME, version: VERSION },
-      { instructions: buildInstructions(ctx.publicUrl, Boolean(ctx.search), Boolean(ctx.scoped)) }
+      { instructions: buildInstructions(ctx) }
     );
     if (ctx.search) registerSemanticSearchTools(server, ctx.search);
     registerDocumentTools(server, ctx.api);
@@ -39,19 +42,25 @@ export function createServerFactory(ctx: ServerContext): () => McpServer {
     registerNoteTools(server, ctx.api);
     registerTaxonomyTools(server, ctx.api, { scoped: Boolean(ctx.scoped) });
     registerUrlUploadTools(server, ctx.api);
-    registerFileUploadTools(server, ctx.api);
+    registerFileUploadTools(server, ctx.api, ctx.uploadRoot);
     return server;
   };
 }
 
-function buildInstructions(publicUrl: string, semantic: boolean, scoped: boolean): string {
+function buildInstructions(ctx: ServerContext): string {
+  const { publicUrl } = ctx;
+  const semantic = Boolean(ctx.search);
+  const lib = ctx.library && ctx.library.name !== "default" ? ctx.library : undefined;
+  const intro = lib
+    ? `Paperless-ngx library "${lib.name}"${lib.description ? `: ${lib.description}` : ""}. Only this library's documents exist here; uploads are filed into it.`
+    : ctx.scoped
+      ? "A Paperless-ngx library limited to some document types: only those documents exist here, and uploads are filed into it."
+      : "Paperless-ngx document library.";
   const finding = semantic
     ? "To find documents about a topic, start with semantic_search (meaning, not exact words; returns matching passages). Use query_documents for exact phrases, titles and structured filters, and get_document_content to read a document (in slices for long ones)."
     : "To find documents, use query_documents (full-text and structured filters), then get_document_content to read one.";
   return [
-    scoped
-      ? "A Paperless-ngx library limited to some document types: only those documents exist here, and uploads are filed as one of them."
-      : "Paperless-ngx document library.",
+    intro,
     finding,
     "To add a document from the web use post_document_from_url; for a file you hold, post_document_from_file. Notes (list/create_document_note) are free-text annotations on a document.",
     "This server cannot delete documents, tags, correspondents or document types. update_document's custom_fields replaces the whole set; use bulk_edit_documents with modify_custom_fields to change one field.",

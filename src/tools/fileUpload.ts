@@ -3,12 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { PaperlessAPI } from "../api/PaperlessAPI.js";
-import { MAX_FILE_SIZE_BYTES, UPLOAD_ROOT } from "../config.js";
+import { MAX_FILE_SIZE_BYTES } from "../config.js";
 import { jsonResult, registerTool, WRITE } from "./utils/register.js";
 import { deriveFilename, UPLOAD_METADATA_SHAPE, uploadOutcome } from "./urlUpload.js";
 
 // For files an agent already holds (downloads, generated reports, attachments).
-// The server mounts one staging directory read-only at PAPERLESS_MCP_UPLOAD_ROOT,
+// The server mounts one staging directory read-only per library (its upload root),
 // with one subdirectory per agent (agent-<name>/), each writable by that agent
 // only. The first path segment names the uploader, and the document is tagged
 // with it, so everything an agent filed stays reviewable.
@@ -59,8 +59,7 @@ async function tagId(api: PaperlessAPI, name: string): Promise<number> {
   return made.id;
 }
 
-export function registerFileUploadTools(server: McpServer, api: PaperlessAPI) {
-  const root = UPLOAD_ROOT;
+export function registerFileUploadTools(server: McpServer, api: PaperlessAPI, root?: string) {
   if (!root) {
     return;
   }

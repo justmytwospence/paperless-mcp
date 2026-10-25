@@ -19,18 +19,25 @@ export const PAPERLESS_PUBLIC_URL = (process.env.PAPERLESS_PUBLIC_URL || PAPERLE
   ""
 );
 
-// Confine the server to these document types (comma-separated names or ids),
-// e.g. "Academic". Unset: the whole library.
-export const DOCUMENT_TYPES = (process.env.PAPERLESS_MCP_DOCUMENT_TYPES || "")
-  .split(",")
-  .map((t) => t.trim())
-  .filter(Boolean);
+const list = (name: string) =>
+  (process.env[name] || "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+// The single-library setup: confine the server to these document types
+// (comma-separated names or ids), or to everything except some. Unset: all of
+// Paperless. PAPERLESS_MCP_LIBRARIES defines several libraries instead.
+export const DOCUMENT_TYPES = list("PAPERLESS_MCP_DOCUMENT_TYPES");
+export const EXCLUDE_DOCUMENT_TYPES = list("PAPERLESS_MCP_EXCLUDE_DOCUMENT_TYPES");
+export const UPLOAD_DOCUMENT_TYPE = process.env.PAPERLESS_MCP_UPLOAD_DOCUMENT_TYPE || "";
 
 export const MAX_FILE_SIZE_BYTES = int("PAPERLESS_MCP_MAX_FILE_BYTES", 100 * 1024 * 1024);
 export const UPLOAD_ROOT = process.env.PAPERLESS_MCP_UPLOAD_ROOT || "";
 
 // Semantic search. Off unless a data directory is given, so a stdio run against a
-// remote Paperless does not start embedding the library by surprise.
+// remote Paperless does not start embedding the library by surprise. With several
+// libraries, each keeps its index in DATA_DIR/<name>.
 export const DATA_DIR = process.env.PAPERLESS_MCP_DATA_DIR || "";
 export const EMBEDDING_MODEL = process.env.PAPERLESS_MCP_EMBEDDING_MODEL || "Xenova/bge-small-en-v1.5";
 // The image ships the model here (pinned and checksummed at build time); without

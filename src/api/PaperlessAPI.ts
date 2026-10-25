@@ -47,17 +47,37 @@ export class OutOfScopeError extends PaperlessError {
 
 export interface PaperlessAPIOptions {
   /**
-   * Document types (names or ids) this server may see. Empty means every document.
-   * Every document read, search, edit and upload is confined to them, so one
-   * Paperless can back several MCP servers with separate libraries.
+   * The library this client is confined to. Every document read, search, edit and
+   * upload stays inside it, so one Paperless can back several MCP libraries.
+   * Types are names or ids; no options means the whole Paperless.
    */
   documentTypes?: string[];
+  /** Everything except these types (untyped documents included). */
+  excludeDocumentTypes?: string[];
+  /** Type given to uploads that do not name one; defaults to the only included type. */
+  uploadDocumentType?: string;
+}
+
+/** A resolved library scope: document type ids. */
+export interface Scope {
+  include: number[] | null;
+  exclude: number[] | null;
+  uploadType: number | null;
+}
+
+const clean = (list?: string[]) => (list || []).map((t) => t.trim()).filter(Boolean);
+
+export function scopeAllows(scope: Scope | null, typeId: number | null): boolean {
+  if (!scope) return true;
+  if (scope.include) return typeId !== null && scope.include.includes(typeId);
+  if (scope.exclude) return typeId === null || !scope.exclude.includes(typeId);
+  return true;
 }
 
 export class PaperlessAPI {
   private readonly apiVersion = process.env.PAPERLESS_API_VERSION || "9";
   private readonly cache = new Map<string, { at: number; value: Promise<unknown> }>();
-  private scopePromise?: Promise<number[] | null>;
+  private scopePromise?: Promise<Scope | null>;
 
   constructor(
     private readonly baseUrl: string,
@@ -65,34 +85,55 @@ export class PaperlessAPI {
     private readonly options: PaperlessAPIOptions = {}
   ) {}
 
-  /** The document type ids in scope, or null for no restriction. Resolved once. */
-  scopeTypeIds(): Promise<number[] | null> {
-    const wanted = (this.options.documentTypes || []).map((t) => t.trim()).filter(Boolean);
-    if (!wanted.length) return Promise.resolve(null);
+  /** The library's scope, or null for the whole Paperless. Resolved once. */
+  scope(): Promise<Scope | null> {
+    const include = clean(this.options.documentTypes);
+    const exclude = clean(this.options.excludeDocumentTypes);
+    const upload = this.options.uploadDocumentType?.trim();
+    if (!include.length && !exclude.length) return Promise.resolve(null);
+    if (include.length && exclude.length) {
+      return Promise.reject(new Error("a library takes document_types or exclude_document_types, not both"));
+    }
     this.scopePromise ??= (async () => {
       const all = await this.request<GetDocumentTypesResponse>(`/document_types/?${ALL}`);
-      const ids = wanted.map((w) => {
+      const resolve = (w: string) => {
         const hit = (all.results || []).find(
           (t) => String(t.id) === w || t.name.toLowerCase() === w.toLowerCase()
         );
-        if (!hit) throw new Error(`PAPERLESS_MCP_DOCUMENT_TYPES: no document type "${w}" in Paperless`);
+        if (!hit) throw new Error(`no document type "${w}" in Paperless`);
         return hit.id;
-      });
-      return [...new Set(ids)];
+      };
+      const scope: Scope = {
+        include: include.length ? [...new Set(include.map(resolve))] : null,
+        exclude: exclude.length ? [...new Set(exclude.map(resolve))] : null,
+        uploadType: null,
+      };
+      if (upload) scope.uploadType = resolve(upload);
+      else if (scope.include?.length === 1) scope.uploadType = scope.include[0];
+      if (scope.uploadType !== null && !scopeAllows(scope, scope.uploadType)) {
+        throw new Error(`upload document type "${upload}" is outside the library`);
+      }
+      return scope;
     })();
     this.scopePromise.catch(() => (this.scopePromise = undefined));
     return this.scopePromise;
   }
 
+  /** Included type ids, or null when the scope is not an include list (for listing types). */
+  async scopeTypeIds(): Promise<number[] | null> {
+    return (await this.scope())?.include ?? null;
+  }
+
   private async scopeQuery(): Promise<string> {
-    const ids = await this.scopeTypeIds();
-    return ids ? `document_type__id__in=${ids.join(",")}` : "";
+    const scope = await this.scope();
+    if (scope?.include) return `document_type__id__in=${scope.include.join(",")}`;
+    if (scope?.exclude) return `document_type__id__none=${scope.exclude.join(",")}`;
+    return "";
   }
 
   /** Throws OutOfScopeError unless every document is in scope (and exists). */
   async assertInScope(ids: number[]): Promise<void> {
-    const scope = await this.scopeTypeIds();
-    if (!scope || !ids.length) return;
+    if (!(await this.scope()) || !ids.length) return;
     const unique = [...new Set(ids)];
     const res = await this.getDocuments(
       `?id__in=${unique.join(",")}&fields=id&page_size=${unique.length}`
@@ -102,12 +143,10 @@ export class PaperlessAPI {
     if (missing.length) throw new OutOfScopeError(`Document ${missing.join(", ")}`);
   }
 
-  /** Throws unless a document type id (to assign) is in scope; null is allowed only without a scope. */
+  /** Throws unless assigning this document type (null: none) keeps a document in scope. */
   async assertTypeInScope(typeId: number | null | undefined): Promise<void> {
     if (typeId === undefined) return;
-    const scope = await this.scopeTypeIds();
-    if (!scope) return;
-    if (typeId === null || !scope.includes(typeId)) {
+    if (!scopeAllows(await this.scope(), typeId)) {
       throw new OutOfScopeError(`Document type ${typeId}`);
     }
   }
@@ -235,10 +274,10 @@ export class PaperlessAPI {
     filename: string,
     metadata: UploadMetadata = {}
   ): Promise<string> {
-    const scope = await this.scopeTypeIds();
+    const scope = await this.scope();
     if (scope) {
-      if (metadata.document_type === undefined && scope.length === 1) {
-        metadata = { ...metadata, document_type: scope[0] };
+      if (metadata.document_type === undefined && scope.uploadType !== null) {
+        metadata = { ...metadata, document_type: scope.uploadType };
       }
       await this.assertTypeInScope(
         metadata.document_type === undefined ? null : Number(metadata.document_type)
@@ -276,7 +315,7 @@ export class PaperlessAPI {
 
   async getDocuments(query = ""): Promise<DocumentsResponse> {
     // Appended last: Django reads the last value of a repeated parameter, so a
-    // caller's own document_type__id__in cannot widen the scope.
+    // caller's own document_type__id__in / __none cannot widen the scope.
     const scope = await this.scopeQuery();
     const q = scope ? (query ? `${query}&${scope}` : `?${scope}`) : query;
     return this.raw<DocumentsResponse>(`/documents/${q}`);
@@ -284,8 +323,7 @@ export class PaperlessAPI {
 
   async getDocument(id: number): Promise<Document> {
     const doc = await this.raw<Document>(`/documents/${id}/`);
-    const scope = await this.scopeTypeIds();
-    if (scope && (doc.document_type === null || !scope.includes(doc.document_type))) {
+    if (!scopeAllows(await this.scope(), doc.document_type)) {
       throw new OutOfScopeError(`Document ${id}`);
     }
     return doc;

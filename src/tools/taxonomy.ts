@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { PaperlessAPI } from "../api/PaperlessAPI.js";
+import { PaperlessAPI, scopeAllows } from "../api/PaperlessAPI.js";
 import { enhanceMatchingAlgorithm, enhanceMatchingAlgorithmArray } from "../api/utils.js";
 import { matchingAlgorithmSchema } from "./utils/matchingAlgorithm.js";
 import { buildQueryString } from "./utils/queryString.js";
@@ -106,8 +106,8 @@ export function registerTaxonomyTools(
     READ_ONLY,
     async (args) => {
       const res = await api.getDocumentTypes(buildQueryString(args) || undefined);
-      const scope = await api.scopeTypeIds();
-      const results = (res.results || []).filter((t) => !scope || scope.includes(t.id));
+      const scope = await api.scope();
+      const results = (res.results || []).filter((t) => scopeAllows(scope, t.id));
       return jsonResult({
         ...res,
         ...(scope ? { count: results.length, next: null, previous: null } : {}),

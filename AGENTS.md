@@ -8,8 +8,11 @@ context, and each `src/tools/*.ts` registers its tools.
 ## Layout
 
 - `src/api/PaperlessAPI.ts`: the only code that talks to Paperless (fetch). It also
-  enforces the document-type scope (`PAPERLESS_MCP_DOCUMENT_TYPES`): every document path
-  goes through its scoped methods, and `request()` refuses `/documents` paths. Taxonomy getters
+  enforces a library's document-type scope (include or exclude): every document path
+  goes through its scoped methods, and `request()` refuses `/documents` paths.
+- `src/libraries.ts`: library definitions (`PAPERLESS_MCP_LIBRARIES`, or one "default"
+  library from the env vars). `src/index.ts` builds one PaperlessAPI, server factory and
+  index per library, sharing the embedder, and routes `/<name>/mcp`. Taxonomy getters
   without a query string return everything and are cached for 60 s.
 - `src/tools/`: tool registration through `tools/utils/register.ts` (`registerTool`, with
   `READ_ONLY`/`WRITE`/`OPEN_WRITE`/`DESTRUCTIVE` annotations). `semanticSearch.ts` exists only
@@ -21,6 +24,8 @@ context, and each `src/tools/*.ts` registers its tools.
 
 ## Rules
 
+- Nothing here may assume a particular Paperless: type names, library names and paths
+  come from configuration, never from code or defaults.
 - The tool surface is deliberate: no tool deletes documents or taxonomy. Adding a tool means
   adding it to the list in `src/server.test.ts`.
 - Tool results hand back source material; nothing in this server calls an LLM.

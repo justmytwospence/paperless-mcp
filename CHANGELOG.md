@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.2.0
+
+- Libraries: `PAPERLESS_MCP_LIBRARIES` (a JSON file or inline JSON) defines several
+  named libraries, each a scoped view of Paperless with its own endpoint
+  (`/<name>/mcp`), upload folder and semantic index, served by one process with one
+  model. The environment-variable setup is unchanged and serves `/mcp`.
+- Scopes can exclude: `exclude_document_types` /
+  `PAPERLESS_MCP_EXCLUDE_DOCUMENT_TYPES` means everything except those types,
+  untyped documents included. `upload_document_type` /
+  `PAPERLESS_MCP_UPLOAD_DOCUMENT_TYPE` sets the type uploads get by default.
+- `/health` reports each library's index.
+
 ## 3.1.0
 
 - `PAPERLESS_MCP_DOCUMENT_TYPES` confines the server to some document types (names or

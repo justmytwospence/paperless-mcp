@@ -120,3 +120,41 @@ test("uploads are filed as the scope's type unless another in-scope type is give
 test("raw requests cannot reach documents around the scope", async () => {
   await assert.rejects(scoped().request("/documents/2/"), /use the document methods/);
 });
+
+const excluding = () => new PaperlessAPI("http://p.test", "t", { excludeDocumentTypes: ["Academic"] });
+
+test("an exclude scope sees everything else, untyped documents included", async () => {
+  const api = excluding();
+  const list = await api.getDocuments("");
+  assert.equal(calls.at(-1)!.url.searchParams.get("document_type__id__none"), "1");
+  assert.equal((await api.getDocument(2)).title, "Invoice");
+  assert.equal((await api.getDocument(3)).title, "Untyped");
+  await assert.rejects(api.getDocument(1), OutOfScopeError);
+  await assert.rejects(api.updateDocument(2, { document_type: 1 }), OutOfScopeError);
+  await api.updateDocument(2, { document_type: null });
+  assert.ok(list);
+});
+
+test("an exclude scope files uploads untyped unless told otherwise, and never as excluded", async () => {
+  const api = excluding();
+  await api.postDocument(Buffer.from("%PDF-"), "a.pdf", {});
+  assert.equal((calls.at(-1)!.body as FormData).get("document_type"), null);
+  await assert.rejects(api.postDocument(Buffer.from("%PDF-"), "b.pdf", { document_type: 1 }), OutOfScopeError);
+  const typed = new PaperlessAPI("http://p.test", "t", {
+    excludeDocumentTypes: ["Academic"],
+    uploadDocumentType: "Invoice",
+  });
+  await typed.postDocument(Buffer.from("%PDF-"), "c.pdf", {});
+  assert.equal((calls.at(-1)!.body as FormData).get("document_type"), "17");
+});
+
+test("include and exclude together, or an upload type outside the scope, are refused", async () => {
+  await assert.rejects(
+    new PaperlessAPI("http://p.test", "t", { documentTypes: ["Academic"], excludeDocumentTypes: ["Invoice"] }).scope(),
+    /not both/
+  );
+  await assert.rejects(
+    new PaperlessAPI("http://p.test", "t", { documentTypes: ["Academic"], uploadDocumentType: "Invoice" }).scope(),
+    /outside the library/
+  );
+});
