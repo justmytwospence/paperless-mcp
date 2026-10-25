@@ -71,7 +71,10 @@ documents with 130 MB of text (papers and some textbooks) is about 75,000 chunks
 4.5 hours on four threads. After that, syncing costs seconds a day. The index takes about
 4 KB per chunk on disk (75,000 chunks: about 300 MB) and memory stays under 1 GB.
 
-Search keeps working during the build; it simply covers what is indexed so far.
+Search keeps working during the build; it simply covers what is indexed so far. The
+model runs in its own worker thread, where documents are also chunked (tokenizing a book
+takes seconds), so the build does not slow down the server's other tools; give it one
+thread fewer than the CPUs the container may use.
 
 ## Privacy
 

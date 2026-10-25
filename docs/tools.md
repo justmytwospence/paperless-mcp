@@ -72,10 +72,14 @@ public addresses are fetched (see [Security](deployment.md#security)).
 
 Metadata: `title`, `filename`, `created`, `correspondent`, `document_type`,
 `storage_path`, `tags`, `archive_serial_number`, `custom_fields` (ids). `wait_seconds`
-(0-120, default 30) waits for Paperless to consume the file and reports the outcome:
+(default 30) waits for Paperless to consume the file and reports the outcome. It bounds the
+whole call, download included, and is capped at 45 seconds, since many MCP clients give
+up on a call after 60; a slower outcome comes back as `pending`:
 
 - `created`, with `document_id` and `web_url`;
-- `duplicate`, with the existing document it matched (Paperless refuses duplicates);
+- `duplicate`, with the existing document it matched (Paperless refuses duplicates). On a
+  library, a match in another library is reported as `duplicate_outside_library: true`,
+  without its id or title;
 - `failed`, with Paperless's reason;
 - `pending`: check later with `get_task_status(task_id)`.
 
@@ -88,7 +92,8 @@ also tagged `agent-<name>`. Present when an upload root is configured
 
 ### `get_task_status`
 
-The outcome of an upload, by the task id it returned.
+The outcome of an upload, by the task id it returned. A library reports only its own
+uploads; another library's task answers like an unknown id.
 
 ## Editing
 
@@ -110,6 +115,9 @@ One operation over many documents: `set_correspondent`, `set_document_type`,
 `modify_custom_fields` (`add_custom_fields`, `remove_custom_fields`), `reprocess`,
 `set_permissions` (`set_permissions`, `owner`, `merge`), `merge`, `split`, `rotate`,
 `delete_pages`.
+
+`pages` is a list of pages and ranges such as `"2,4-6"`: for `split`, each group becomes
+a new document; for `delete_pages`, those pages are removed.
 
 Removing a tag only removes it from these documents. `delete_pages`, and `merge` or
 `split` with `delete_originals`, discard content and require `confirm: true`. There is no
@@ -133,6 +141,10 @@ Notes are indexed for semantic search.
 | `create_tag`, `update_tag` | Name, color, automatic matching rule |
 | `create_correspondent` | Name, matching rule |
 | `create_document_type` | Name, matching rule. Not offered by a library (a new type would fall outside it) |
+
+On a library, the lists show only what the library may see, with document counts for its
+documents ([Libraries](configuration.md#libraries)); `count` and `all` describe the
+library, and `next` / `previous` are page numbers.
 
 Tags, correspondents and document types cannot be deleted here: removing one changes
 every document that uses it, which is a decision for the Paperless UI.

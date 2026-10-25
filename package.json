@@ -1,6 +1,6 @@
 {
   "name": "paperless-mcp-server",
-  "version": "3.2.2",
+  "version": "3.3.0",
   "description": "MCP server for Paperless-ngx: local semantic search with passages, safe filing and notes, and separate libraries per audience",
   "keywords": [
     "mcp",

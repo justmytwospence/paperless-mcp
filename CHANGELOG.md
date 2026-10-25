@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.3.0
+
+- Libraries no longer show each other's taxonomy. Tags, correspondents, custom fields
+  and storage paths are shared in Paperless; a library now lists only those its own
+  documents use (plus any no document uses yet), with `document_count` counting its
+  documents, and refuses to attach or rename one only another library uses (it
+  answers like a missing id), so names cannot be read back through a document either.
+  Library lists are paged by the server: `count` and `all` describe the library and
+  `next` / `previous` are page numbers. `list_document_types` no longer lists other
+  libraries' type ids in `all`.
+- Duplicate uploads no longer reveal another library's documents. Paperless checks
+  duplicates across all of it; a match outside the library is reported as `duplicate`
+  with `duplicate_outside_library: true` and no id or title. `get_task_status` reports
+  only the library's own uploads (or tasks that created one of its documents).
+- `bulk_edit_documents` `delete_pages` works: `pages` (`"2"`, `"2,4-6"`) is sent as the
+  list of page numbers Paperless requires, which it rejected as a string.
+- Indexing no longer slows every other tool. Chunking and embedding run in a worker
+  thread; on the main thread, tokenizing long documents blocked requests for seconds at
+  a time while the index was built.
+- Uploads finish inside common client timeouts: `wait_seconds` now bounds the whole call,
+  download included, and is capped at 45 s (values up to 120 are still accepted). A
+  slower outcome is `pending`, for `get_task_status`.
+- HTTP keep-alive is 120 s (`PAPERLESS_MCP_KEEP_ALIVE_MS`), longer than reverse proxies
+  keep idle connections, so a pooled connection is no longer reset mid-request.
+- `post_document_from_file` reports a missing file without the server's own paths.
+
 ## 3.2.2
 
 - Indexing no longer stalls on large libraries. Documents were fetched 20 at a time

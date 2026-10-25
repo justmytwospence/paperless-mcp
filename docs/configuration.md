@@ -37,7 +37,7 @@ and `/health`:
 | `PAPERLESS_MCP_DATA_DIR` | unset (`/data` in the image) | Enables semantic search; the index lives here (`index.db`, or `<name>/index.db` per library) |
 | `PAPERLESS_MCP_MODEL_DIR` | unset (`/app/models` in the image) | A directory holding the model files; when set, nothing is downloaded. Unset: downloaded into `<data dir>/models` on first use |
 | `PAPERLESS_MCP_EMBEDDING_MODEL` | `Xenova/bge-small-en-v1.5` | Any transformers.js feature-extraction model. Changing it rebuilds the index |
-| `PAPERLESS_MCP_EMBED_THREADS` | `1` | CPU threads for embedding. Most of the first build's time; 4 is about 2.3x faster than 1 |
+| `PAPERLESS_MCP_EMBED_THREADS` | `1` | CPU threads for embedding. Most of the first build's time; 4 is about 2.3x faster than 1. Chunking and embedding run in a worker thread, so leave a core for the thread answering requests (with a CPU limit of 4, use 3) |
 | `PAPERLESS_MCP_CHUNK_TOKENS` | `480` | Chunk size in model tokens (bge's window is 512) |
 | `PAPERLESS_MCP_CHUNK_OVERLAP_TOKENS` | `64` | Overlap between consecutive chunks |
 | `PAPERLESS_MCP_SYNC_INTERVAL_MINUTES` | `10` | How often changed documents are re-read |
@@ -52,6 +52,7 @@ whole library, delete the index.
 |---|---|---|
 | `PAPERLESS_MCP_UPLOAD_ROOT` | unset | Enables `post_document_from_file` (single library; libraries set `upload_root`) |
 | `PAPERLESS_MCP_MAX_FILE_BYTES` | 100 MB | Largest file accepted by either upload tool |
+| `PAPERLESS_MCP_KEEP_ALIVE_MS` | `120000` | HTTP keep-alive timeout. Keep it above your reverse proxy's idle-connection timeout, or the proxy can reuse a connection the server is closing (a reset request) |
 
 The upload root holds one folder per agent, named `agent-<name>` (lowercase letters,
 digits, dashes). Mount it read-only into the server, and each agent's own folder
@@ -71,8 +72,18 @@ A library is one MCP endpoint over part of Paperless, chosen by document type:
 - its semantic index holds only its documents;
 - `list_document_types` shows only its types, and `create_document_type` is not offered.
 
-Tags, correspondents and custom fields are shared across Paperless and stay visible in
-every library.
+Tags, correspondents, custom fields and storage paths are shared across Paperless, so a
+library sees only those its own documents use, plus any no document uses yet (one just
+created). `document_count` counts the library's documents. What only another library
+uses is hidden: it is missing from the lists, cannot be attached to a document or
+renamed, and answers like an id that does not exist.
+
+Paperless detects duplicate uploads across all of Paperless. When an upload matches a
+document in another library, the outcome is still `duplicate` (the file was not filed),
+but without that document's id or title. `get_task_status` reports only uploads the
+library started (or that created one of its documents); task ids are remembered in
+memory, so after a restart a pending upload's task is reported once it has created its
+document.
 
 ### One library
 

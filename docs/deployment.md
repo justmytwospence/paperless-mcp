@@ -17,7 +17,7 @@ services:
       PAPERLESS_URL: http://paperless:8000            # the Paperless service on this network
       PAPERLESS_PUBLIC_URL: https://paperless.example.com
       PAPERLESS_API_KEY: ${PAPERLESS_MCP_TOKEN:?}
-      PAPERLESS_MCP_EMBED_THREADS: "4"
+      PAPERLESS_MCP_EMBED_THREADS: "3"                  # one core of the 4 stays free for requests
       MCP_ALLOWED_HOSTS: paperless-mcp
     volumes:
       - ./mcp-index:/data
@@ -103,7 +103,9 @@ What the server itself guarantees, whoever is calling:
   Page deletion and merge or split with `delete_originals` need `confirm: true`.
 - **Libraries are enforced in one place**: the client code that talks to Paperless adds
   the library's filter to every document query and checks every document id, so no tool
-  can reach a document outside the library.
+  can reach a document outside the library. Shared tags, correspondents, custom fields
+  and storage paths are narrowed to what the library uses, and duplicate-upload outcomes
+  never name another library's document.
 - **`post_document_from_url` only fetches public addresses.** Private, loopback,
   link-local and other non-global ranges are refused at connect time, on every redirect,
   including DNS answers that change between check and connect.
