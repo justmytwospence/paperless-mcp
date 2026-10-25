@@ -1,0 +1,53 @@
+# paperless-mcp next to an existing Paperless-ngx stack. Copy into the same compose
+# project (or join Paperless's network) so http://paperless:8000 resolves, set
+# PAPERLESS_MCP_TOKEN in .env, then: docker compose up -d paperless-mcp
+#
+# Two libraries from one Paperless: research papers, and everything else. Each has its
+# own endpoint (/research/mcp, /household/mcp), upload folder and index.
+services:
+  paperless-mcp:
+    image: ghcr.io/justmytwospence/paperless-mcp:3
+    restart: unless-stopped
+    environment:
+      PAPERLESS_URL: http://paperless:8000
+      PAPERLESS_PUBLIC_URL: https://paperless.example.com
+      PAPERLESS_API_KEY: ${PAPERLESS_MCP_TOKEN:?set PAPERLESS_MCP_TOKEN in .env}
+      PAPERLESS_MCP_LIBRARIES: /config/libraries.json
+      PAPERLESS_MCP_EMBED_THREADS: "4"
+      MCP_ALLOWED_HOSTS: paperless-mcp,localhost
+    configs:
+      - source: libraries
+        target: /config/libraries.json
+    volumes:
+      - ./mcp-index:/data
+      # One folder per agent inside each upload area (agent-<name>/); mount each agent's
+      # folder read-write into that agent only.
+      - ./mcp-uploads/research:/uploads/research:ro
+      - ./mcp-uploads/household:/uploads/household:ro
+    # Localhost only: the HTTP transport does not authenticate. For remote clients, put an
+    # authenticating proxy in front instead of publishing this port.
+    ports:
+      - "127.0.0.1:8000:8000"
+    deploy:
+      resources:
+        limits: { cpus: "4", memory: 2G }
+
+configs:
+  libraries:
+    content: |
+      {
+        "libraries": [
+          {
+            "name": "research",
+            "description": "academic papers, preprints and textbooks",
+            "document_types": ["Paper"],
+            "upload_root": "/uploads/research"
+          },
+          {
+            "name": "household",
+            "description": "bills, contracts, tax forms and other paperwork",
+            "exclude_document_types": ["Paper"],
+            "upload_root": "/uploads/household"
+          }
+        ]
+      }

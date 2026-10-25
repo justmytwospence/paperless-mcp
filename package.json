@@ -1,7 +1,27 @@
 {
   "name": "paperless-mcp-server",
   "version": "3.2.2",
-  "description": "MCP server for Paperless-ngx: search (keyword and semantic), read, file and annotate documents",
+  "description": "MCP server for Paperless-ngx: local semantic search with passages, safe filing and notes, and separate libraries per audience",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "paperless-ngx",
+    "paperless",
+    "semantic-search",
+    "rag",
+    "document-management",
+    "ai-agents",
+    "claude"
+  ],
+  "homepage": "https://github.com/justmytwospence/paperless-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/justmytwospence/paperless-mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/justmytwospence/paperless-mcp.git"
+  },
+  "license": "ISC",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -22,11 +42,6 @@
   },
   "engines": {
     "node": ">=24"
-  },
-  "license": "ISC",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/justmytwospence/paperless-mcp.git"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",

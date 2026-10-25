@@ -35,3 +35,10 @@ context, and each `src/tools/*.ts` registers its tools.
   `store.ts` for an incompatible schema change; it then rebuilds itself.
 - Run `npm run typecheck && npm test` before committing. Conventional commits.
 - Release: bump `package.json`, add a `CHANGELOG.md` entry, tag `vX.Y.Z`, push the tag.
+
+## Documentation
+
+User docs live in `README.md` (pitch and quick start) and `docs/` (configuration,
+deployment and security, semantic search, tools). A change to behaviour, a setting or a
+tool updates the matching page in the same commit. Keep examples generic: no hostnames,
+type names or agents from any one installation.

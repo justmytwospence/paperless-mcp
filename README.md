@@ -1,148 +1,190 @@
 # paperless-mcp-server
 
-An MCP server for [Paperless-ngx](https://docs.paperless-ngx.com/) built for agents
-that read and file a document library: find documents by meaning or by keyword, read
-them (in slices, for long books), add papers from the web or files they hold, and
-annotate them with notes.
+[![ci](https://github.com/justmytwospence/paperless-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/justmytwospence/paperless-mcp/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/tag/justmytwospence/paperless-mcp?label=image&sort=semver)](https://github.com/justmytwospence/paperless-mcp/pkgs/container/paperless-mcp)
+[![license: ISC](https://img.shields.io/badge/license-ISC-blue)](LICENSE)
+
+**Give your AI agents a library card for your [Paperless-ngx](https://docs.paperless-ngx.com/) archive.**
+
+An [MCP](https://modelcontextprotocol.io/) server that lets Claude, Codex, Cursor or any MCP
+client find documents in Paperless *by meaning*, read exactly the passage they need, file
+new papers and files, and annotate what they read. Semantic search runs on your own
+hardware: no API key, and no document text leaves the machine.
+
+```text
+You:    What have I saved about variational inference for hierarchical models?
+Agent:  [semantic_search] Three documents cover it, with the passages that matched:
+        - "Compositional Amortized Inference for Large-Scale Hierarchical
+          Bayesian Models": "...amortized posterior over group-level ..."
+          https://paperless.example.com/documents/1013/details
+        - "Variational Inference: A Review for Statisticians": ...
+```
+
+## Why this one
+
+- **Search that understands the question.** `semantic_search` finds the papers about a
+  method even when they never use your words, and returns the matching *passages*, not
+  just titles. It covers every page of every document, books included, and blends in
+  Paperless's own keyword search so exact names still rank first.
+- **Built for agents, not for admin.** Agents can add a paper from a URL or a file they
+  hold, read a 900-page book in slices, leave notes, and cite documents with clickable
+  links. They cannot delete documents, tags, correspondents or document types: those
+  tools don't exist here.
+- **Separate libraries from one Paperless.** Expose your research papers to one set of
+  agents and your private paperwork to another, each as its own endpoint that cannot see
+  the other's documents.
+- **No LLM inside.** Every tool returns source material; the agent you already use does
+  the reasoning. Nothing here spends tokens or sends your documents to a model provider.
+- **Small and inspectable.** One container, one SQLite file per library, a pinned and
+  checksummed embedding model inside the image, about 110 tests.
+
+## Quick start
+
+You need a Paperless-ngx instance and an API token (Paperless: *My Profile* > *API Auth
+Token*). The server acts as that user and sees what that user sees.
+
+**1. Run it.**
+
+```sh
+docker run -d --name paperless-mcp -p 127.0.0.1:8000:8000 \
+  -e PAPERLESS_URL=https://paperless.example.com \
+  -e PAPERLESS_API_KEY=your-token \
+  -v paperless-mcp-data:/data \
+  ghcr.io/justmytwospence/paperless-mcp:3
+```
+
+It starts indexing in the background straight away; `curl localhost:8000/health` shows
+progress. Search works from the first minute and reports how much of the library it
+covers.
+
+**2. Connect a client.**
+
+Claude Code:
+
+```sh
+claude mcp add --transport http paperless http://127.0.0.1:8000/mcp
+```
+
+Any client that takes a Streamable HTTP URL: `http://127.0.0.1:8000/mcp`.
+
+Clients that launch servers over stdio (Claude Desktop and others) can run the same
+image as a subprocess instead; see [Deployment](docs/deployment.md#stdio-clients).
+
+**3. Ask.** Some things to try:
+
+- "What do I have on causal inference with instrumental variables? Quote the key passages."
+- "Find the warranty for the dishwasher and tell me when it expires."
+- "Add https://arxiv.org/pdf/2006.11239 to Paperless and tag it diffusion."
+- "Summarise chapter 4 of the Gelman book I saved." (read in slices with `get_document_content`)
+- "Leave a note on that paper: compare with the zebrafish results."
+
+> **The HTTP endpoint has no authentication.** Bind it to localhost (as above) or a
+> private network, or put it behind a proxy that authenticates. See
+> [Security](docs/deployment.md#security).
+
+## How semantic search works
+
+```text
+Paperless ──(REST API)──> sync ──> chunk (~480 tokens, sentence-aware, every page)
+                                   └─> embed (bge-small-en-v1.5, ONNX on CPU)
+                                        └─> SQLite + sqlite-vec  (<data>/index.db)
+
+semantic_search("...") ──> embed query ──> nearest chunks ──┐
+                       └─> Paperless keyword search ────────┴─> fuse ranks ──> documents + passages
+```
+
+- The index covers each document's full text plus a metadata chunk (title, correspondent,
+  type, tags, custom fields, and your notes), so a note you left is searchable too.
+- A background sync re-reads only what changed, every 10 minutes, and re-embeds only text
+  that actually changed: retagging a book costs one small chunk, not the whole book.
+- Filters (tags, correspondent, type, dates) are applied by Paperless, so permissions and
+  filter semantics are exactly Paperless's own.
+- The first build is the slow part: about 7,000 chunks an hour on one CPU thread and
+  17,000 on four (a page of text is roughly one chunk). Details, sizing and tuning: [Semantic search](docs/semantic-search.md).
+
+## Libraries
+
+By default the server exposes all of Paperless at `/mcp`. To split it, define libraries by
+document type; each gets its own endpoint, upload folder and index, served by one process
+that shares one copy of the model:
+
+```json
+{
+  "libraries": [
+    { "name": "research", "document_types": ["Paper", "Book"] },
+    { "name": "household", "exclude_document_types": ["Paper", "Book"] }
+  ]
+}
+```
+
+`/research/mcp` then cannot see a single household document, and the reverse: an
+out-of-library document answers exactly like one that does not exist, edits cannot move a
+document across, and uploads land in the library they were made through. A single
+library can also be set with environment variables. See
+[Configuration](docs/configuration.md#libraries).
 
 ## Tools
 
 | | |
 |---|---|
-| Find | `semantic_search` (by meaning, with matching passages), `query_documents` (full text and structured filters), `list_documents` |
-| Read | `get_document`, `get_document_content` (`offset`/`max_chars`), `download_document`, `get_document_thumbnail`, plus `paperless://documents/{id}/download` and `/thumb` resources |
+| Find | `semantic_search`, `query_documents` (full-text query language, structured and custom-field filters, more-like-this), `list_documents` |
+| Read | `get_document`, `get_document_content` (with `offset`/`max_chars`), `download_document`, `get_document_thumbnail` |
 | File | `post_document_from_url`, `post_document_from_file`, `get_task_status` |
 | Edit | `update_document`, `bulk_edit_documents` |
 | Notes | `list_document_notes`, `create_document_note`, `delete_document_note` |
 | Taxonomy | `list_tags`, `create_tag`, `update_tag`, `list_correspondents`, `create_correspondent`, `list_document_types`, `create_document_type`, `list_custom_fields` |
 
-Nothing here deletes a document, tag, correspondent or document type.
+Every tool carries MCP annotations (read-only, destructive), so clients can auto-approve
+reads and ask before writes. Arguments and behaviour: [Tools](docs/tools.md).
 
-## Semantic search
+## Documentation
 
-With `PAPERLESS_MCP_DATA_DIR` set, the server keeps a vector index of the library in
-`<dir>/index.db`:
+- [Configuration](docs/configuration.md): every setting, and libraries
+- [Deployment](docs/deployment.md): Docker Compose, stdio clients, putting it behind auth
+- [Semantic search](docs/semantic-search.md): indexing, sizing, coverage, privacy
+- [Tools](docs/tools.md): the full tool reference
+- [Changelog](CHANGELOG.md)
 
-- **What is indexed:** each document's full content, split into overlapping chunks of
-  about 480 tokens with no cap per document, plus one metadata chunk (title,
-  correspondent, type, tags, date, custom fields) that also carries the document's
-  notes.
-- **Model:** `Xenova/bge-small-en-v1.5`, run locally on the CPU through ONNX. It is
-  downloaded once into `<dir>/models`; no API key, and no document text leaves the
-  host.
-- **Sync:** a background loop reads only what changed since the last pass, every
-  `PAPERLESS_MCP_SYNC_INTERVAL_MINUTES`. An hourly reconcile pass removes deleted
-  documents and picks up new notes, which do not change a document's modified time.
-  Content is re-embedded only when its text changes, so retagging a book costs one
-  small chunk.
-- **Query:** `semantic_search` ranks chunks by cosine similarity and fuses the result
-  with Paperless's keyword search by reciprocal rank fusion (`hybrid`, on by
-  default). Filters (tags, correspondent, type, dates) are evaluated by Paperless
-  first. Each result carries its best passages with character offsets for
-  `get_document_content`, and every response reports index coverage (`index`).
+## Compared with other Paperless MCP servers
 
-The first build takes a while (roughly an hour per 50,000 chunks on one core); search
-works throughout and says how much is covered. The index can always be rebuilt from
-Paperless: delete it and it starts over. It also starts over by itself when the model
-changes.
+There are several good ones; this is how this one differs, so you can pick:
 
-## Configuration
+- [baruchiro/paperless-mcp](https://github.com/baruchiro/paperless-mcp), where this
+  project started, covers much more of the Paperless admin API (mail rules, deletion,
+  base64 upload) and has no semantic search. Pick it to *administer* Paperless.
+- [OrellBuehler/paperless-mcp](https://github.com/OrellBuehler/paperless-mcp) exposes
+  115+ tools including users and workflows, with optional semantic search that embeds
+  the first part of each document through OpenAI or Ollama.
+- [hensing/searchless-ngx](https://github.com/hensing/searchless-ngx) is a read-only,
+  Python, ChromaDB-based semantic search server tuned for Open WebUI.
 
-| Variable | Default | |
-|---|---|---|
-| `PAPERLESS_URL` | required | API base, e.g. `http://paperless:8000` |
-| `PAPERLESS_API_KEY` | required | API token; the server acts as this user |
-| `PAPERLESS_PUBLIC_URL` | `PAPERLESS_URL` | Browser URL used in `web_url` links |
-| `PAPERLESS_API_VERSION` | `9` | REST API version sent in `Accept` |
-| `MCP_TRANSPORT` | `stdio` | `http` for Streamable HTTP (the image default) |
-| `PORT` | `8000` | HTTP port; `/mcp` and `/health` |
-| `MCP_ALLOWED_HOSTS` | any | Host header allowlist (DNS-rebinding protection) |
-| `PAPERLESS_MCP_LIBRARIES` | unset | Several libraries: a JSON file path or inline JSON (see Libraries) |
-| `PAPERLESS_MCP_DOCUMENT_TYPES` / `_EXCLUDE_DOCUMENT_TYPES` / `_UPLOAD_DOCUMENT_TYPE` | unset | The single library's scope (see Libraries) |
-| `PAPERLESS_MCP_DATA_DIR` | unset (`/data` in the image) | Enables semantic search |
-| `PAPERLESS_MCP_SYNC_INTERVAL_MINUTES` | `10` | Incremental sync interval |
-| `PAPERLESS_MCP_RECONCILE_INTERVAL_MINUTES` | `60` | Full reconcile interval |
-| `PAPERLESS_MCP_EMBED_THREADS` | `1` | ONNX intra-op threads |
-| `PAPERLESS_MCP_CHUNK_TOKENS` / `_CHUNK_OVERLAP_TOKENS` | `480` / `64` | Chunk size; changing it applies to documents as they are re-indexed |
-| `PAPERLESS_MCP_UPLOAD_ROOT` | unset | Single library: enables `post_document_from_file`, a folder with one `agent-<name>/` subfolder per agent |
-| `PAPERLESS_MCP_MAX_FILE_BYTES` | 100 MB | Upload size cap |
-
-### Libraries
-
-A library is one MCP endpoint over part of Paperless, chosen by document type. Agents
-connected to a library see only its documents: searches, lists, reads, notes, edits
-and downloads are confined to it, a document outside it answers exactly like one that
-does not exist, edits cannot move a document out of it, uploads are filed into it, and
-its semantic index holds only its documents. Tags, correspondents and custom fields
-are shared by Paperless and stay visible.
-
-For one library, use environment variables: `PAPERLESS_MCP_DOCUMENT_TYPES=Invoice,Receipt`
-(only these), or `PAPERLESS_MCP_EXCLUDE_DOCUMENT_TYPES=Invoice` (everything else,
-untyped documents included), and optionally `PAPERLESS_MCP_UPLOAD_DOCUMENT_TYPE` for
-uploads that name no type (default: the only included type, if there is one). It is
-served at `/mcp`. With neither set, the server sees all of Paperless.
-
-For several, point `PAPERLESS_MCP_LIBRARIES` at a JSON file (or give the JSON inline).
-One process then serves each library at `/<name>/mcp`, with one copy of the model:
-
-```json
-{
-  "libraries": [
-    {
-      "name": "research",
-      "description": "academic papers and preprints",
-      "document_types": ["Paper"],
-      "upload_root": "/uploads/research"
-    },
-    {
-      "name": "household",
-      "description": "bills, contracts and other household paperwork",
-      "exclude_document_types": ["Paper"],
-      "upload_document_type": "Paperwork",
-      "upload_root": "/uploads/household",
-      "semantic_search": true
-    }
-  ]
-}
-```
-
-| Field | | |
-|---|---|---|
-| `name` | required | URL segment, lowercase letters, digits, dashes |
-| `description` | | One line agents read in the server instructions |
-| `document_types` / `exclude_document_types` | one or neither | Names or ids |
-| `upload_document_type` | | Type for uploads that name none |
-| `upload_root` | | Enables `post_document_from_file` for this library |
-| `semantic_search` | `true` | Index in `PAPERLESS_MCP_DATA_DIR/<name>` (needs a data dir) |
-
-Over stdio, the server serves one library: `PAPERLESS_MCP_LIBRARY`, or the first.
-
-The HTTP transport does not authenticate requests. Run it behind a proxy that does,
-on a network only that proxy can reach.
-
-```sh
-docker run -e PAPERLESS_URL=http://paperless:8000 -e PAPERLESS_API_KEY=... \
-  -v ./mcp-index:/data -p 8000:8000 ghcr.io/justmytwospence/paperless-mcp:3
-```
+This one is for agents that *use* a library: local full-text semantic search with
+passages, safe writes only, and separate libraries per audience.
 
 ## Development
 
 ```sh
 npm ci --ignore-scripts
-npm test                               # unit tests (fake embedder, in-memory Paperless)
-PAPERLESS_MCP_MODEL_TESTS=1 npm test   # plus a real-model smoke test
+npm test                               # unit tests: fake embedder, in-memory Paperless
+PAPERLESS_MCP_MODEL_TESTS=1 npm test   # plus a smoke test against the real model
 npm run typecheck && npm run build
+PAPERLESS_URL=... PAPERLESS_API_KEY=... npm run dev   # stdio, from source
 ```
 
-Pushing a `vX.Y.Z` tag publishes `ghcr.io/justmytwospence/paperless-mcp:X.Y.Z`, `:X.Y`
-and `:X`.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Releases: a `vX.Y.Z` tag publishes
+`ghcr.io/justmytwospence/paperless-mcp:X.Y.Z`, `:X.Y` and `:X` (amd64 and arm64).
 
-## Origin and credits
+## Credits
 
 This began as a fork of [baruchiro/paperless-mcp](https://github.com/baruchiro/paperless-mcp)
-(ISC), whose document, note, query and custom-field handling it still builds on, and
-became its own project at 3.0.0. The semantic search design takes ideas from
-[OrellBuehler/paperless-mcp](https://github.com/OrellBuehler/paperless-mcp) (sqlite-vec,
+(ISC) by Baruch Odem, whose document, note, query and custom-field handling it still
+builds on, and became its own project at 3.0.0. The semantic search design takes ideas
+from [OrellBuehler/paperless-mcp](https://github.com/OrellBuehler/paperless-mcp) (sqlite-vec,
 hash-gated re-embedding) and [hensing/searchless-ngx](https://github.com/hensing/searchless-ngx)
-(chunked retrieval, watermark sync, metadata filters with vector ranking); no code was
-copied from either.
+(chunked retrieval, watermark sync, filters with vector ranking); no code was copied from
+either. Embeddings: [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5)
+(MIT) through [transformers.js](https://github.com/huggingface/transformers.js).
+
+## License
+
+[ISC](LICENSE).
