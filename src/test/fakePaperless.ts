@@ -18,6 +18,8 @@ const page = <T>(results: T[], next: boolean) => ({
 export class FakePaperless {
   docs = new Map<number, Document>();
   requests: string[] = [];
+  /** Document id -> how many more fetches of it fail (like a cut-off response). */
+  failures = new Map<number, number>();
   tags = [
     { id: 1, name: "statistics" },
     { id: 2, name: "household" },
@@ -44,6 +46,13 @@ export class FakePaperless {
         let docs = [...self.docs.values()];
         if (q.get("id__in")) {
           const ids = new Set(q.get("id__in")!.split(",").map(Number));
+          for (const id of ids) {
+            const left = self.failures.get(id) ?? 0;
+            if (left > 0) {
+              self.failures.set(id, left - 1);
+              throw new TypeError("terminated");
+            }
+          }
           docs = docs.filter((d) => ids.has(d.id));
         }
         if (q.get("modified__gte")) {

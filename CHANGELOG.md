@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.2.2
+
+- Indexing no longer stalls on large libraries. Documents were fetched 20 at a time
+  with their full text, and a page holding a few books could be cut off mid-response
+  ("terminated"), which aborted the whole pass and left the rest of the library
+  unindexed until the next hourly attempt, failing at the same place. Documents are
+  now fetched one at a time with retries; one that still fails is skipped and retried
+  at the next sync tick, not the next hour.
+- `last_error` in the index status is no longer cleared by an unrelated pass
+  succeeding, so a partly built index cannot look healthy.
+
 ## 3.2.1
 
 - `post_document_from_file`'s description no longer names particular agents or paths;

@@ -28,6 +28,7 @@ function setup(opts: { file?: string; model?: string } = {}) {
   const syncer = new Syncer(paperless.api, store, embedder, {
     chunkTokens: 40,
     overlapTokens: 8,
+    retryDelayMs: 0,
     log: () => {},
   });
   const search = new SemanticSearch(paperless.api, store, embedder, () => syncer.getStatus());
@@ -149,4 +150,22 @@ test("the index survives a restart, and a model change rebuilds it", async () =>
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a document that cannot be fetched is retried, then skipped without stopping the pass", async () => {
+  const { syncer, paperless } = setup();
+  paperless.failures.set(2, 1); // fails once: the retry succeeds
+  paperless.failures.set(3, 99); // keeps failing
+  await syncer.reconcile();
+  const status = syncer.getStatus();
+  assert.equal(status.documents_indexed, 2, "documents 1 and 2 indexed despite 3");
+  assert.match(status.last_error!, /1 document\(s\) not indexed.*3 \(terminated\)/);
+
+  await syncer.incremental();
+  assert.ok(syncer.getStatus().last_error, "an incremental success does not hide the reconcile gap");
+
+  paperless.failures.delete(3);
+  await syncer.reconcile();
+  assert.equal(syncer.getStatus().documents_indexed, 3);
+  assert.equal(syncer.getStatus().last_error, null);
 });

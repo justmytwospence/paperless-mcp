@@ -10,6 +10,8 @@ export interface SyncOptions {
   overlapTokens: number;
   /** Chunks per embedding call; small, so queries interleave with a backfill. */
   batchSize?: number;
+  /** Base delay between fetch retries (default 1000 ms; grows quadratically). */
+  retryDelayMs?: number;
   log?: (message: string) => void;
 }
 
@@ -29,6 +31,17 @@ type IndexableDoc = Pick<
 
 const DOC_FIELDS =
   "id,title,content,modified,notes,tags,correspondent,document_type,custom_fields,created_date";
+
+async function withRetry<T>(fn: () => Promise<T>, delayMs: number, attempts = 3): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i >= attempts) throw err;
+      await new Promise((r) => setTimeout(r, delayMs * i * i));
+    }
+  }
+}
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 32);
 
@@ -93,6 +106,12 @@ export class Syncer {
     last_error: null,
   };
   private timers: NodeJS.Timeout[] = [];
+  private errors: Record<string, string> = {};
+  /** Set when a reconcile left documents unindexed; the next tick retries it. */
+  private reconcilePending = false;
+  private get retryDelay() {
+    return this.opts.retryDelayMs ?? 1000;
+  }
 
   constructor(
     private readonly api: PaperlessAPI,
@@ -105,7 +124,8 @@ export class Syncer {
 
   getStatus(): SyncStatus {
     this.refreshCounts();
-    return { ...this.status };
+    const errors = Object.entries(this.errors).map(([k, v]) => `${k}: ${v}`);
+    return { ...this.status, last_error: errors.length ? errors.join("; ") : null };
   }
 
   private refreshCounts() {
@@ -125,10 +145,13 @@ export class Syncer {
       try {
         await pass();
         this.status.last_sync = new Date().toISOString();
-        this.status.last_error = null;
+        // A pass clears only its own error: an incremental success says nothing
+        // about documents a failed reconcile left behind.
+        if (!this.errors[name]?.startsWith("partial:")) delete this.errors[name];
       } catch (err) {
-        this.status.last_error = `${name}: ${err instanceof Error ? err.message : String(err)}`;
-        this.log(`${name} failed: ${this.status.last_error}`);
+        this.errors[name] = err instanceof Error ? err.message : String(err);
+        if (name === "reconcile") this.reconcilePending = true;
+        this.log(`${name} failed: ${this.errors[name]}`);
       } finally {
         this.status.syncing = false;
         this.refreshCounts();
@@ -140,7 +163,12 @@ export class Syncer {
   start(incrementalMinutes: number, reconcileMinutes: number): void {
     void this.reconcile().then(() => this.incremental());
     if (incrementalMinutes > 0) {
-      this.timers.push(setInterval(() => void this.incremental(), incrementalMinutes * 60_000));
+      this.timers.push(
+        setInterval(
+          () => void (this.reconcilePending ? this.reconcile() : this.incremental()),
+          incrementalMinutes * 60_000
+        )
+      );
     }
     if (reconcileMinutes > 0) {
       this.timers.push(setInterval(() => void this.reconcile(), reconcileMinutes * 60_000));
@@ -184,13 +212,25 @@ export class Syncer {
       if (removed || todo.length) {
         this.log(`reconcile: ${todo.length} to index, ${removed} removed, ${live.size} in Paperless`);
       }
-      for (let i = 0; i < todo.length; i += 20) {
-        const ids = todo.slice(i, i + 20);
-        const res = await this.api.getDocuments(
-          `?id__in=${ids.join(",")}&fields=${DOC_FIELDS}&page_size=${ids.length}`
-        );
-        for (const doc of res.results || []) await this.indexDocument(doc);
-        if ((i / 20) % 10 === 9) this.log(`reconcile: ${Math.min(i + 20, todo.length)}/${todo.length}`);
+      // One document per request: a page of full texts can run to hundreds of MB
+      // (books), which servers and proxies cut off. One failing document is retried
+      // and then skipped, never the whole pass.
+      const failed: string[] = [];
+      for (let i = 0; i < todo.length; i++) {
+        try {
+          const doc = await withRetry(() => this.fetchDocument(todo[i]), this.retryDelay);
+          if (doc) await this.indexDocument(doc);
+        } catch (err) {
+          failed.push(`${todo[i]} (${err instanceof Error ? err.message : String(err)})`);
+        }
+        if (i % 100 === 99) this.log(`reconcile: ${i + 1}/${todo.length}`);
+      }
+      this.reconcilePending = failed.length > 0;
+      if (failed.length) {
+        this.errors.reconcile = `partial: ${failed.length} document(s) not indexed, retrying: ${failed.slice(0, 3).join(", ")}`;
+        this.log(this.errors.reconcile);
+      } else {
+        delete this.errors.reconcile;
       }
       this.bumpWatermark([...live.values()].map((d) => d.modified));
     });
@@ -200,19 +240,33 @@ export class Syncer {
     return this.enqueue("incremental", async () => {
       const watermark = this.store.getMeta("watermark");
       if (!watermark) return; // the reconcile pass sets it
-      const seen: string[] = [];
+      const changed: Array<{ id: number; modified: string }> = [];
       for (let page = 1; ; page++) {
         const res = await this.api.getDocuments(
-          `?modified__gte=${encodeURIComponent(watermark)}&ordering=modified&fields=${DOC_FIELDS}&page_size=20&page=${page}`
+          `?modified__gte=${encodeURIComponent(watermark)}&ordering=modified&fields=id,modified&page_size=500&page=${page}`
         );
-        for (const doc of res.results || []) {
-          await this.indexDocument(doc);
-          seen.push(doc.modified);
-        }
+        changed.push(...(res.results || []).map((d) => ({ id: d.id, modified: d.modified })));
         if (!res.next) break;
+      }
+      const seen: string[] = [];
+      for (const { id, modified } of changed) {
+        try {
+          const doc = await withRetry(() => this.fetchDocument(id), this.retryDelay);
+          if (doc) await this.indexDocument(doc);
+        } catch (err) {
+          // Left to the reconcile pass, which re-checks every document.
+          this.reconcilePending = true;
+          this.log(`incremental: document ${id} not indexed, left for reconcile: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        seen.push(modified);
       }
       this.bumpWatermark(seen);
     });
+  }
+
+  private async fetchDocument(id: number): Promise<IndexableDoc | undefined> {
+    const res = await this.api.getDocuments(`?id__in=${id}&fields=${DOC_FIELDS}&page_size=1`);
+    return res.results?.[0];
   }
 
   private bumpWatermark(modified: string[]) {
