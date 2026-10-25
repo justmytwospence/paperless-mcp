@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.1
+
+- Image: make the bundled model readable by the `node` user. On GitHub's builder its
+  directories were root-only, so semantic search failed to load.
+
 ## 3.0.0
 
 This server is no longer a fork. It started from baruchiro/paperless-mcp 2.2.1

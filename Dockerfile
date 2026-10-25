@@ -41,7 +41,8 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=model / ./models
-RUN mkdir -p /data && chown node:node /data
+# ADD in a scratch stage leaves its parent directories root-only on some builders.
+RUN mkdir -p /data && chown node:node /data && chmod -R a+rX /app/models
 USER node
 VOLUME /data
 EXPOSE 8000
