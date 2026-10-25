@@ -1,4 +1,5 @@
-import type { Embedder } from "../search/embed.js";
+import type { LocalEmbedder } from "../search/embed.js";
+import { prepareChunks } from "../search/prepare.js";
 
 const DIMS = 64;
 
@@ -15,7 +16,7 @@ function hash(word: string): number {
  * Bag-of-words embeddings: texts sharing words are close. Enough to test ranking
  * and plumbing without a model; tokens are whitespace-separated words.
  */
-export function fakeEmbedder(model = "fake-bow"): Embedder & { calls: string[][] } {
+export function fakeEmbedder(model = "fake-bow"): LocalEmbedder & { calls: string[][] } {
   const calls: string[][] = [];
   const embed = (text: string) => {
     const v = new Float32Array(DIMS);
@@ -23,7 +24,7 @@ export function fakeEmbedder(model = "fake-bow"): Embedder & { calls: string[][]
     const norm = Math.hypot(...v) || 1;
     return v.map((x) => x / norm);
   };
-  return {
+  const local: LocalEmbedder & { calls: string[][] } = {
     model,
     dims: DIMS,
     calls,
@@ -33,5 +34,7 @@ export function fakeEmbedder(model = "fake-bow"): Embedder & { calls: string[][]
     },
     embedQuery: async (text) => embed(text),
     countTokens: (text) => (text.match(/\S+/g) || []).length,
+    prepare: (input) => prepareChunks(input, local),
   };
+  return local;
 }

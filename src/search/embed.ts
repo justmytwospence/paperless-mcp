@@ -1,10 +1,18 @@
+import { type PrepareInput, prepareChunks, type TokenEmbedder } from "./prepare.js";
+import type { StoredChunk } from "./store.js";
+
+/** The model as the server uses it: in production a worker thread (see worker.ts). */
 export interface Embedder {
   readonly model: string;
   readonly dims: number;
-  embedDocuments(texts: string[]): Promise<Float32Array[]>;
   embedQuery(text: string): Promise<Float32Array>;
-  countTokens(text: string): number;
+  /** Chunks and embeds a document's changed parts (see prepareChunks). */
+  prepare(input: PrepareInput): Promise<StoredChunk[]>;
+  close?(): Promise<void>;
 }
+
+/** The model loaded in this thread. */
+export interface LocalEmbedder extends Embedder, TokenEmbedder {}
 
 // bge-*-en-v1.5 is trained asymmetrically: queries carry this instruction,
 // passages do not.
@@ -20,7 +28,7 @@ export async function loadEmbedder(
   threads: number,
   /** A directory holding `<model>/` files; when set, nothing is downloaded. */
   localModelDir?: string
-): Promise<Embedder> {
+): Promise<LocalEmbedder> {
   const { pipeline, env } = await import("@huggingface/transformers");
   env.cacheDir = cacheDir;
   if (localModelDir) {
@@ -42,11 +50,13 @@ export async function loadEmbedder(
     return texts.map((_, i) => data.slice(i * dims, (i + 1) * dims));
   };
 
-  return {
+  const local: LocalEmbedder = {
     model,
     dims,
     embedDocuments: run,
     embedQuery: async (text) => (await run([(isBge ? BGE_QUERY_PREFIX : "") + text]))[0],
     countTokens: (text) => tokenizer.encode(text, { add_special_tokens: false }).length,
+    prepare: (input) => prepareChunks(input, local),
   };
+  return local;
 }

@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
 import type { PaperlessAPI } from "../api/PaperlessAPI.js";
 import type { CustomField, Document, Note } from "../api/types.js";
-import { chunkText } from "./chunk.js";
 import type { Embedder } from "./embed.js";
-import type { ChunkKind, DocRecord, StoredChunk, VectorStore } from "./store.js";
+import type { ChunkKind, DocRecord, VectorStore } from "./store.js";
 
 export interface SyncOptions {
   chunkTokens: number;
@@ -314,56 +313,19 @@ export class Syncer {
       return;
     }
 
-    const count = (t: string) => this.embedder.countTokens(t);
-    const titlePrefix = `${doc.title}\n\n`;
-    const budget = Math.max(64, this.opts.chunkTokens - count(titlePrefix));
-    const chunks: Array<Omit<StoredChunk, "embedding"> & { embedText: string }> = [];
     const kinds: ChunkKind[] = [];
-
-    if (metaChanged) {
-      kinds.push("meta");
-      const metaBody = notes ? `${meta}\n\nNotes:\n${notes}` : meta;
-      chunkText(metaBody, {
-        maxTokens: this.opts.chunkTokens,
-        overlapTokens: this.opts.overlapTokens,
-        countTokens: count,
-      }).forEach((c, i) =>
-        chunks.push({
-          chunk_no: -(i + 1),
-          kind: "meta",
-          start: null,
-          end: null,
-          text: c.text,
-          embedText: i === 0 ? c.text : titlePrefix + c.text,
-        })
-      );
-    }
-    if (contentChanged) {
-      kinds.push("content");
-      chunkText(content, {
-        maxTokens: budget,
-        overlapTokens: this.opts.overlapTokens,
-        countTokens: count,
-      }).forEach((c, i) =>
-        chunks.push({
-          chunk_no: i,
-          kind: "content",
-          start: c.start,
-          end: c.end,
-          text: c.text,
-          embedText: titlePrefix + c.text,
-        })
-      );
-    }
-
-    const batch = this.opts.batchSize ?? 8;
-    const stored: StoredChunk[] = [];
-    for (let i = 0; i < chunks.length; i += batch) {
-      const slice = chunks.slice(i, i + batch);
-      const vectors = await this.embedder.embedDocuments(slice.map((c) => c.embedText));
-      slice.forEach(({ embedText: _e, ...c }, j) => stored.push({ ...c, embedding: vectors[j] }));
-      await new Promise((r) => setImmediate(r));
-    }
+    if (metaChanged) kinds.push("meta");
+    if (contentChanged) kinds.push("content");
+    // Chunking and embedding run where the model lives (a worker thread in
+    // production), so a long document does not stall the server's requests.
+    const stored = await this.embedder.prepare({
+      title: doc.title,
+      meta: metaChanged ? (notes ? `${meta}\n\nNotes:\n${notes}` : meta) : null,
+      content: contentChanged ? content : null,
+      chunkTokens: this.opts.chunkTokens,
+      overlapTokens: this.opts.overlapTokens,
+      batchSize: this.opts.batchSize,
+    });
     this.store.replaceDocument(record, stored, have ? kinds : undefined);
   }
 }

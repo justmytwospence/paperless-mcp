@@ -13,10 +13,11 @@ import { setPublicUrl } from "./api/documentLinks.js";
 import { PaperlessAPI } from "./api/PaperlessAPI.js";
 import * as config from "./config.js";
 import { type Library, loadLibraries } from "./libraries.js";
-import { type Embedder, loadEmbedder } from "./search/embed.js";
+import type { Embedder } from "./search/embed.js";
 import { SemanticSearch } from "./search/search.js";
 import { VectorStore } from "./search/store.js";
 import { Syncer } from "./search/sync.js";
+import { loadWorkerEmbedder } from "./search/worker.js";
 import { createServerFactory, SERVER_NAME, VERSION } from "./server.js";
 
 if (!config.PAPERLESS_URL || !config.PAPERLESS_API_KEY) {
@@ -36,12 +37,12 @@ try {
 
 let embedder: Promise<Embedder> | undefined;
 const sharedEmbedder = () =>
-  (embedder ??= loadEmbedder(
-    config.EMBEDDING_MODEL,
-    path.join(config.DATA_DIR || "/tmp/paperless-mcp", "models"),
-    config.EMBED_THREADS,
-    config.MODEL_DIR || undefined
-  ));
+  (embedder ??= loadWorkerEmbedder({
+    model: config.EMBEDDING_MODEL,
+    cacheDir: path.join(config.DATA_DIR || "/tmp/paperless-mcp", "models"),
+    threads: config.EMBED_THREADS,
+    localModelDir: config.MODEL_DIR || undefined,
+  }));
 
 interface Served {
   library: Library;
@@ -151,6 +152,7 @@ if (transport === "stdio") {
   const shutdown = async () => {
     for (const s of served) s.syncer?.stop();
     await Promise.all(handlers.map((h) => h.close()));
+    await embedder?.then((e) => e.close?.()).catch(() => undefined);
     httpServer.close(() => process.exit(0));
   };
   process.on("SIGTERM", shutdown);
