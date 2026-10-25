@@ -1,45 +1,11 @@
 import assert from "node:assert/strict";
 import { test, describe } from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport";
-import type { CallToolResult, JSONRPCMessage } from "@modelcontextprotocol/sdk/types";
-import { PaperlessAPI } from "../api/PaperlessAPI";
-import { Note } from "../api/types";
-import { registerNoteTools } from "./notes";
-
-class TestTransport implements Transport {
-  peer?: TestTransport;
-  onclose?: () => void;
-  onerror?: (error: Error) => void;
-  onmessage?: (message: JSONRPCMessage) => void;
-
-  async start(): Promise<void> {}
-
-  async send(message: JSONRPCMessage): Promise<void> {
-    queueMicrotask(() => this.peer?.onmessage?.(message));
-  }
-
-  async close(): Promise<void> {
-    this.onclose?.();
-  }
-}
-
-function createTransportPair() {
-  const clientTransport = new TestTransport();
-  const serverTransport = new TestTransport();
-  clientTransport.peer = serverTransport;
-  serverTransport.peer = clientTransport;
-  return { clientTransport, serverTransport };
-}
-
-function parseToolText(result: CallToolResult) {
-  const item = result.content?.[0];
-  if (!item || item.type !== "text") {
-    throw new Error("Expected text tool response");
-  }
-  return JSON.parse(item.text);
-}
+import { PaperlessAPI } from "../api/PaperlessAPI.js";
+import { Note } from "../api/types.js";
+import { registerNoteTools } from "./notes.js";
+import type { Client } from "@modelcontextprotocol/client";
+import type { CallToolResult } from "@modelcontextprotocol/server";
+import { parseToolText, withClient } from "../test/mcp.js";
 
 interface NoteApiCalls {
   getDocumentNotes: number[];
@@ -70,28 +36,8 @@ function createNoteApi(notes: Note[] = []) {
   return { api, calls };
 }
 
-async function withNoteClient(
-  api: PaperlessAPI,
-  run: (client: Client) => Promise<void>
-) {
-  const server = new McpServer({ name: "paperless-note-test", version: "1.0.0" });
-  registerNoteTools(server, api);
-
-  const client = new Client({
-    name: "paperless-note-test-client",
-    version: "1.0.0",
-  });
-  const { clientTransport, serverTransport } = createTransportPair();
-
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-
-  try {
-    await run(client);
-  } finally {
-    await client.close();
-    await server.close();
-  }
+function withNoteClient(api: PaperlessAPI, run: (client: Client) => Promise<void>) {
+  return withClient((server) => registerNoteTools(server, api), run);
 }
 
 describe("document note tools", () => {

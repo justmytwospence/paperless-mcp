@@ -1,4 +1,33 @@
-# @baruchiro/paperless-mcp
+# Changelog
+
+## 3.0.0
+
+This server is no longer a fork. It started from baruchiro/paperless-mcp 2.2.1
+(ISC); entries below 3.0.0 are that project's history.
+
+- Semantic search: `semantic_search` ranks documents by meaning over a local vector
+  index (bge-small-en-v1.5, sqlite-vec) of every document's full text, metadata and
+  notes, fused with Paperless's keyword search, and returns the matching passages.
+  The index syncs in the background and is enabled by `PAPERLESS_MCP_DATA_DIR`.
+- Rebuilt on the MCP TypeScript SDK v2 (`@modelcontextprotocol/server`, Hono),
+  ESM, Node 24. Requests are not authenticated by the server: put it behind an
+  authenticating proxy. The Bearer passthrough and `--no-auth` are gone; the server
+  always acts with `PAPERLESS_API_KEY`. Port 8000, `/mcp` and `/health`.
+- `get_document_content` takes `offset` and `max_chars`, so long books can be read
+  in slices.
+- Tool set narrowed to what agents filing and reading a library need. Removed: all
+  mail tools; `post_document` (use `post_document_from_url` or
+  `post_document_from_file`); `search_documents` (use `query_documents`); every
+  delete and bulk-edit of tags, correspondents, document types and custom fields;
+  `get_correspondent`, `get_document_type`, `get_custom_field`,
+  `create_custom_field`, `update_custom_field`, `update_correspondent`,
+  `update_document_type`; and `bulk_edit_documents`' `delete` method.
+  `delete_pages`, and merge or split with `delete_originals`, now need `confirm`.
+- Names in document results resolve for every tag, correspondent and type (the
+  lookups were limited to Paperless's first page of 25).
+- axios, form-data and express are gone in favour of Node's fetch.
+
+# Earlier releases (baruchiro/paperless-mcp)
 
 ## 2.2.1
 

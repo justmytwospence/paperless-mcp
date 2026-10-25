@@ -1,11 +1,11 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
+import type { McpServer } from "@modelcontextprotocol/server";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { PaperlessAPI } from "../api/PaperlessAPI";
-import { MAX_FILE_SIZE_BYTES } from "./documents";
-import { withErrorHandling } from "./utils/middlewares";
-import { deriveFilename, UPLOAD_METADATA_SHAPE, uploadOutcome } from "./urlUpload";
+import { PaperlessAPI } from "../api/PaperlessAPI.js";
+import { MAX_FILE_SIZE_BYTES, UPLOAD_ROOT } from "../config.js";
+import { jsonResult, registerTool, WRITE } from "./utils/register.js";
+import { deriveFilename, UPLOAD_METADATA_SHAPE, uploadOutcome } from "./urlUpload.js";
 
 // For files an agent already holds (downloads, generated reports, attachments).
 // The server mounts one staging directory read-only at PAPERLESS_MCP_UPLOAD_ROOT,
@@ -55,26 +55,24 @@ async function tagId(api: PaperlessAPI, name: string): Promise<number> {
   if (hit) {
     return hit.id;
   }
-  const made = await api.request("/tags/", {
-    method: "POST",
-    body: JSON.stringify({ name, matching_algorithm: 0 }),
-  });
+  const made = await api.createTag({ name, matching_algorithm: 0 });
   return made.id;
 }
 
 export function registerFileUploadTools(server: McpServer, api: PaperlessAPI) {
-  const root = process.env.PAPERLESS_MCP_UPLOAD_ROOT;
+  const root = UPLOAD_ROOT;
   if (!root) {
     return;
   }
-  server.tool(
+  registerTool(
+    server,
     "post_document_from_file",
     "Add a document to Paperless from a file you already have (downloaded, generated, or an attachment). " +
       "First save the file into your own folder in the shared upload area -- the path your instructions " +
       "give (e.g. Hermes: /opt/data/paperless-inbox/, NanoClaw: /workspace/extra/paperless-inbox/) -- then call " +
       "this with 'path' relative to the upload area, i.e. '<your agent folder>/<file name>' such as " +
-      "'agent-hermes/invoice.pdf'. For documents on the web use post_document_from_url instead; never " +
-      "post_document. The document is tagged with your agent folder's name. Set 'title' (and other " +
+      "'agent-hermes/invoice.pdf'. For documents on the web use post_document_from_url instead. " +
+      "The document is tagged with your agent folder's name. Set 'title' (and other " +
       "metadata) if you know it. Waits for Paperless to consume the file (default 30s) and reports " +
       "'created' with document_id and web_url, 'duplicate' with the existing document, 'failed', or " +
       "'pending' (check later with get_task_status). You may delete your copy afterwards.",
@@ -92,8 +90,8 @@ export function registerFileUploadTools(server: McpServer, api: PaperlessAPI) {
         .optional()
         .describe("Tag ids, in addition to the automatic uploader tag."),
     },
-    withErrorHandling(async (args) => {
-      if (!api) throw new Error("Please configure API connection first");
+    WRITE,
+    async (args) => {
       const { abs, uploader } = resolveUpload(root, args.path);
       const body = fs.readFileSync(abs);
       const name = path.basename(abs);
@@ -109,7 +107,7 @@ export function registerFileUploadTools(server: McpServer, api: PaperlessAPI) {
         bytes: body.length,
         ...(await uploadOutcome(api, response, wait_seconds)),
       };
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    })
+      return jsonResult(result, true);
+    }
   );
 }

@@ -1,4 +1,4 @@
-import { MATCHING_ALGORITHM_OPTIONS, MatchingAlgorithm } from "./types";
+import { MATCHING_ALGORITHM_OPTIONS, MatchingAlgorithm } from "./types.js";
 
 export const headersToObject = (headers: any): Record<string, string> => {
   if (!headers) return {};

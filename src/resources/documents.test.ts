@@ -1,38 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types";
-import type { AxiosResponse } from "axios";
-import { PaperlessAPI } from "../api/PaperlessAPI";
-import { createDocument } from "../test/mocks/paperlessApi";
-import { registerDocumentResources } from "./documents";
-
-class TestTransport implements Transport {
-  peer?: TestTransport;
-  onclose?: () => void;
-  onerror?: (error: Error) => void;
-  onmessage?: (message: JSONRPCMessage) => void;
-
-  async start(): Promise<void> {}
-
-  async send(message: JSONRPCMessage): Promise<void> {
-    queueMicrotask(() => this.peer?.onmessage?.(message));
-  }
-
-  async close(): Promise<void> {
-    this.onclose?.();
-  }
-}
-
-function createTransportPair() {
-  const clientTransport = new TestTransport();
-  const serverTransport = new TestTransport();
-  clientTransport.peer = serverTransport;
-  serverTransport.peer = clientTransport;
-  return { clientTransport, serverTransport };
-}
+import type { Client } from "@modelcontextprotocol/client";
+import type { BinaryResponse, PaperlessAPI } from "../api/PaperlessAPI.js";
+import { withClient } from "../test/mcp.js";
+import { createDocument } from "../test/mocks/paperlessApi.js";
+import { registerDocumentResources } from "./documents.js";
 
 function emptyPaginationResponse<T>(results: T[] = [], all: number[] = []) {
   return {
@@ -44,40 +16,12 @@ function emptyPaginationResponse<T>(results: T[] = [], all: number[] = []) {
   };
 }
 
-function createBinaryResponse(
-  body: string,
-  contentType: string
-): AxiosResponse<ArrayBuffer> {
-  return {
-    data: Buffer.from(body),
-    status: 200,
-    statusText: "OK",
-    headers: {
-      "content-type": contentType,
-    },
-    config: {},
-  } as unknown as AxiosResponse<ArrayBuffer>;
+function createBinaryResponse(body: string, contentType: string): BinaryResponse {
+  return { data: Buffer.from(body), contentType };
 }
 
-async function withResourceClient(
-  api: PaperlessAPI,
-  run: (client: Client) => Promise<void>
-) {
-  const server = new McpServer({ name: "paperless-test", version: "1.0.0" });
-  registerDocumentResources(server, api);
-
-  const client = new Client({ name: "paperless-test-client", version: "1.0.0" });
-  const { clientTransport, serverTransport } = createTransportPair();
-
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-
-  try {
-    await run(client);
-  } finally {
-    await client.close();
-    await server.close();
-  }
+function withResourceClient(api: PaperlessAPI, run: (client: Client) => Promise<void>) {
+  return withClient((server) => registerDocumentResources(server, api), run);
 }
 
 test("resources/list does not enumerate documents at startup", async () => {

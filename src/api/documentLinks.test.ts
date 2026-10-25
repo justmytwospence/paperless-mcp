@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { documentUrl, setPublicUrl } from "./documentLinks";
+import { documentUrl, setPublicUrl } from "./documentLinks.js";
 
 test("document links use the public URL and reject non-ids", () => {
   setPublicUrl("https://paperless.example.test/");

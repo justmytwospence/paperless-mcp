@@ -1,214 +1,98 @@
 #!/usr/bin/env node
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import express from "express";
-import { parseArgs } from "node:util";
-import {
-  createMcpServer,
-  getBearerToken,
-  sendUnauthorized,
-} from "./server";
-const { version } = require("../package.json") as { version: string };
 
-const {
-  values: { baseUrl, token, http: useHttp, port, publicUrl, "no-auth": noAuth },
-} = parseArgs({
-  options: {
-    baseUrl: { type: "string" },
-    token: { type: "string" },
-    http: { type: "boolean", default: false },
-    port: { type: "string" },
-    publicUrl: { type: "string", default: "" },
-    "no-auth": { type: "boolean", default: false },
-  },
-  allowPositionals: true,
-});
+// Entry point: serve the MCP server over stdio (default) or Streamable HTTP
+// (MCP_TRANSPORT=http), and, when PAPERLESS_MCP_DATA_DIR is set, keep the semantic
+// search index in step with Paperless in the background.
 
-const resolvedBaseUrl = baseUrl || process.env.PAPERLESS_URL;
-const resolvedToken = token || process.env.PAPERLESS_API_KEY;
-const resolvedPublicUrl =
-  publicUrl || process.env.PAPERLESS_PUBLIC_URL || resolvedBaseUrl;
-const resolvedPort = port ? parseInt(port, 10) : 3000;
+import path from "node:path";
+import { serve } from "@hono/node-server";
+import { createMcpHonoApp } from "@modelcontextprotocol/hono";
+import { createMcpHandler } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import type { Context } from "hono";
+import { setPublicUrl } from "./api/documentLinks.js";
+import { PaperlessAPI } from "./api/PaperlessAPI.js";
+import * as config from "./config.js";
+import { loadEmbedder } from "./search/embed.js";
+import { SemanticSearch } from "./search/search.js";
+import { VectorStore } from "./search/store.js";
+import { Syncer } from "./search/sync.js";
+import { createServerFactory, SERVER_NAME, VERSION } from "./server.js";
 
-if (!resolvedBaseUrl) {
-  console.error(
-    "Usage: paperless-mcp --baseUrl <url> --token <token> [--http] [--port <port>] [--publicUrl <url>] [--no-auth]"
-  );
-  console.error(
-    "Or set PAPERLESS_URL and PAPERLESS_API_KEY environment variables."
-  );
+if (!config.PAPERLESS_URL || !config.PAPERLESS_API_KEY) {
+  console.error("ERROR: PAPERLESS_URL and PAPERLESS_API_KEY environment variables are required.");
   process.exit(1);
 }
 
-if (!useHttp && !resolvedToken) {
-  console.error(
-    "Usage: paperless-mcp --baseUrl <url> --token <token> [--http] [--port <port>] [--publicUrl <url>] [--no-auth]"
-  );
-  console.error(
-    "Or set PAPERLESS_URL and PAPERLESS_API_KEY environment variables."
-  );
-  process.exit(1);
-}
+setPublicUrl(config.PAPERLESS_PUBLIC_URL);
+const api = new PaperlessAPI(config.PAPERLESS_URL, config.PAPERLESS_API_KEY);
 
-if (noAuth && !resolvedToken) {
-  console.error(
-    "--no-auth allows unauthenticated requests to use the server's Paperless token, " +
-      "but no server token is configured. Provide --token <token> or set PAPERLESS_API_KEY, " +
-      "or drop --no-auth and have clients authenticate with 'Authorization: Bearer <token>'."
-  );
-  process.exit(1);
-}
-
-function buildServer(requestToken: string) {
-  return createMcpServer({
-    baseUrl: resolvedBaseUrl!,
-    token: requestToken,
-    version,
-    publicUrl: resolvedPublicUrl!,
-  });
-}
-
-async function main() {
-  if (useHttp) {
-    if (noAuth) {
-      console.log(
-        "[paperless-mcp] --no-auth is enabled: requests without an 'Authorization: Bearer' header " +
-          "will use the server's Paperless token. Only use this on a trusted/local network."
-      );
-    } else if (resolvedToken) {
-      console.log(
-        "[paperless-mcp] A server token is configured, but unauthenticated requests are rejected. " +
-          "Clients must send 'Authorization: Bearer <paperless-token>'. " +
-          "To use the server token for unauthenticated requests instead, restart with the --no-auth flag " +
-          "(trusted/local networks only)."
-      );
-    }
-
-    const app = express();
-    // Express defaults to 100kb, which caps post_document's base64 file at ~73 kB.
-    app.use(
-      express.json({ limit: process.env.PAPERLESS_MCP_BODY_LIMIT || "100kb" })
+let syncer: Syncer | undefined;
+let search: Promise<SemanticSearch> | undefined;
+if (config.DATA_DIR) {
+  search = (async () => {
+    const embedder = await loadEmbedder(
+      config.EMBEDDING_MODEL,
+      path.join(config.DATA_DIR, "models"),
+      config.EMBED_THREADS,
+      config.MODEL_DIR || undefined
     );
-
-    // Store transports for each session
-    const sseTransports: Record<string, SSEServerTransport> = {};
-
-    app.post("/mcp", async (req, res) => {
-      const requestToken = getBearerToken(req, {
-        fallbackToken: resolvedToken,
-        allowAnonymous: noAuth,
-      });
-      if (!requestToken) {
-        sendUnauthorized(res);
-        return;
-      }
-      try {
-        const server = buildServer(requestToken);
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,
-        });
-        res.on("close", () => {
-          transport.close();
-        });
-        await server.connect(transport);
-        await transport.handleRequest(req, res, req.body);
-      } catch (error) {
-        console.error("Error handling MCP request:", error);
-        if (!res.headersSent) {
-          res.status(500).json({
-            jsonrpc: "2.0",
-            error: {
-              code: -32603,
-              message: "Internal server error",
-            },
-            id: null,
-          });
-        }
-      }
+    const store = new VectorStore(path.join(config.DATA_DIR, "index.db"), embedder.model, embedder.dims);
+    syncer = new Syncer(api, store, embedder, {
+      chunkTokens: config.CHUNK_TOKENS,
+      overlapTokens: config.CHUNK_OVERLAP_TOKENS,
     });
-
-    app.get("/mcp", async (req, res) => {
-      res.writeHead(405).end(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          error: {
-            code: -32000,
-            message: "Method not allowed.",
-          },
-          id: null,
-        })
-      );
-    });
-
-    app.delete("/mcp", async (req, res) => {
-      res.writeHead(405).end(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          error: {
-            code: -32000,
-            message: "Method not allowed.",
-          },
-          id: null,
-        })
-      );
-    });
-
-    app.get("/sse", async (req, res) => {
-      console.log("SSE request received");
-      const requestToken = getBearerToken(req, {
-        fallbackToken: resolvedToken,
-        allowAnonymous: noAuth,
-      });
-      if (!requestToken) {
-        sendUnauthorized(res);
-        return;
-      }
-      try {
-        const server = buildServer(requestToken);
-        const transport = new SSEServerTransport("/messages", res);
-        sseTransports[transport.sessionId] = transport;
-        res.on("close", () => {
-          delete sseTransports[transport.sessionId];
-          transport.close();
-        });
-        await server.connect(transport);
-      } catch (error) {
-        console.error("Error handling SSE request:", error);
-        if (!res.headersSent) {
-          res.status(500).json({
-            jsonrpc: "2.0",
-            error: {
-              code: -32603,
-              message: "Internal server error",
-            },
-            id: null,
-          });
-        }
-      }
-    });
-
-    app.post("/messages", async (req, res) => {
-      const sessionId = req.query.sessionId as string;
-      const transport = sseTransports[sessionId];
-      if (transport) {
-        await transport.handlePostMessage(req, res, req.body);
-      } else {
-        res.status(400).send("No transport found for sessionId");
-      }
-    });
-
-    app.listen(resolvedPort, () => {
-      console.log(
-        `MCP Stateless Streamable HTTP Server listening on port ${resolvedPort}`
-      );
-    });
-    // await new Promise((resolve) => setTimeout(resolve, 1000000));
-  } else {
-    const server = buildServer(resolvedToken!);
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-  }
+    syncer.start(config.SYNC_INTERVAL_MINUTES, config.RECONCILE_INTERVAL_MINUTES);
+    const s = syncer;
+    console.error(`semantic search: ${embedder.model} (${embedder.dims} dims), index ${config.DATA_DIR}`);
+    return new SemanticSearch(api, store, embedder, () => s.getStatus());
+  })();
+  // A failed model load must not take the rest of the server down; the tool
+  // reports the error instead.
+  search.catch((err) => console.error("semantic search unavailable:", err));
 }
 
-main().catch((e) => console.error(e.message));
+const createServer = createServerFactory({ api, publicUrl: config.PAPERLESS_PUBLIC_URL, search });
+const transport = (process.env.MCP_TRANSPORT ?? "stdio").toLowerCase();
+
+if (transport === "stdio") {
+  serveStdio(createServer);
+  console.error(`${SERVER_NAME} ${VERSION} running via stdio`);
+} else if (transport === "http") {
+  const port = Number(process.env.PORT ?? 8000);
+  // Hostnames clients may use in the Host header (DNS-rebinding protection). Unset
+  // means any host, which is fine on a private network or behind a reverse proxy.
+  const extraHosts = (process.env.MCP_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean);
+  const allowedHosts = extraHosts.length ? ["localhost", "127.0.0.1", ...extraHosts] : undefined;
+
+  const handler = createMcpHandler(createServer);
+  const app = createMcpHonoApp({ host: "0.0.0.0", allowedHosts });
+  app.get("/health", (c) =>
+    c.json({
+      status: "ok",
+      name: SERVER_NAME,
+      version: VERSION,
+      index: syncer ? syncer.getStatus() : null,
+    })
+  );
+  const mcp = (c: Context) => handler.fetch(c.req.raw, { parsedBody: c.get("parsedBody") });
+  app.all("/mcp", mcp);
+  app.all("/", mcp);
+
+  const httpServer = serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) =>
+    console.error(`${SERVER_NAME} ${VERSION} listening on http://0.0.0.0:${info.port}/mcp`)
+  );
+  const shutdown = async () => {
+    syncer?.stop();
+    await handler.close();
+    httpServer.close(() => process.exit(0));
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+} else {
+  console.error(`ERROR: MCP_TRANSPORT must be "stdio" or "http", got "${transport}".`);
+  process.exit(1);
+}

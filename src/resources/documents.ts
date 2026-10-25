@@ -1,31 +1,30 @@
 import {
-  McpServer,
+  type BlobResourceContents,
+  type McpServer,
+  type ReadResourceResult,
   ResourceTemplate,
-} from "@modelcontextprotocol/sdk/server/mcp.js";
-import type {
-  BlobResourceContents,
-  ReadResourceResult,
-  TextResourceContents,
-} from "@modelcontextprotocol/sdk/types";
-import type { AxiosResponse } from "axios";
-import { PaperlessAPI } from "../api/PaperlessAPI";
+  type TextResourceContents,
+} from "@modelcontextprotocol/server";
+import type { BinaryResponse, PaperlessAPI } from "../api/PaperlessAPI.js";
 
 type TemplateVariables = Record<string, string | string[]>;
 
 export function registerDocumentResources(server: McpServer, api: PaperlessAPI) {
-  server.resource(
+  server.registerResource(
     "paperless-document-resource",
     new ResourceTemplate("paperless://documents/{id}/{resource}", {
       list: undefined,
     }),
+    { description: "A document's file (download) or thumbnail (thumb)." },
     async (uri, variables) => readDocumentResource(api, uri, variables)
   );
 
-  server.resource(
+  server.registerResource(
     "paperless-document-original-download",
     new ResourceTemplate("paperless://documents/{id}/download{?original}", {
       list: undefined,
     }),
+    { description: "A document's file; original=true for the file as uploaded instead of the archived PDF." },
     async (uri, variables) =>
       readDocumentDownloadResource(
         api,
@@ -89,11 +88,11 @@ async function readDocumentThumbnailResource(
 
 function responseToResourceContents(
   uri: string,
-  response: AxiosResponse<ArrayBuffer>,
+  response: BinaryResponse,
   fallbackMimeType: string
 ): TextResourceContents | BlobResourceContents {
-  const mimeType = getHeader(response, "content-type") || fallbackMimeType;
-  const data = Buffer.from(response.data);
+  const mimeType = response.contentType || fallbackMimeType;
+  const data = response.data;
 
   if (isTextMimeType(mimeType)) {
     return {
@@ -135,28 +134,6 @@ function readVariable(variables: TemplateVariables, name: string): string {
 
 function isTrueQueryValue(value?: string): boolean {
   return value === "true" || value === "1";
-}
-
-function getHeader(
-  response: AxiosResponse<ArrayBuffer>,
-  headerName: string
-): string | undefined {
-  const headers = response.headers as Record<string, unknown> & {
-    get?: (name: string) => unknown;
-  };
-
-  if (typeof headers.get === "function") {
-    const value = headers.get(headerName);
-    if (typeof value === "string") {
-      return value;
-    }
-  }
-
-  const value = headers[headerName] || headers[headerName.toLowerCase()];
-  if (Array.isArray(value)) {
-    return String(value[0]);
-  }
-  return typeof value === "string" ? value : undefined;
 }
 
 function isTextMimeType(mimeType: string): boolean {

@@ -1,47 +1,43 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { PaperlessAPI } from "../api/PaperlessAPI";
-import { Note } from "../api/types";
-import { withErrorHandling } from "./utils/middlewares";
+import { PaperlessAPI } from "../api/PaperlessAPI.js";
+import { Note } from "../api/types.js";
+import { DESTRUCTIVE, jsonResult, READ_ONLY, registerTool, WRITE } from "./utils/register.js";
 
 function notesResult(notes: Note[]) {
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify(notes),
-      },
-    ],
-  };
+  return jsonResult(notes);
 }
 
 export function registerNoteTools(server: McpServer, api: PaperlessAPI) {
-  server.tool(
+  registerTool(
+    server,
     "list_document_notes",
     "List all notes attached to a document. Notes are free-text comments on a document and are the natural place for an audit trail (e.g. \"invoice paid on X from account Y\") or progress notes on an action item.",
     {
       id: z.number().describe("The document ID"),
     },
-    withErrorHandling(async (args) => {
-      if (!api) throw new Error("Please configure API connection first");
+    READ_ONLY,
+    async (args) => {
       return notesResult(await api.getDocumentNotes(args.id));
-    })
+    }
   );
 
-  server.tool(
+  registerTool(
+    server,
     "create_document_note",
     "Add a note to a document. Use this to record an audit trail or progress note directly on the document. Returns the document's full list of notes after the note is added.",
     {
       id: z.number().describe("The document ID"),
       note: z.string().min(1).describe("The note text to add"),
     },
-    withErrorHandling(async (args) => {
-      if (!api) throw new Error("Please configure API connection first");
+    WRITE,
+    async (args) => {
       return notesResult(await api.createDocumentNote(args.id, args.note));
-    })
+    }
   );
 
-  server.tool(
+  registerTool(
+    server,
     "delete_document_note",
     "⚠️ DESTRUCTIVE: Permanently delete a single note from a document by its note ID. This operation is irreversible. Returns the document's remaining notes.",
     {
@@ -51,14 +47,14 @@ export function registerNoteTools(server: McpServer, api: PaperlessAPI) {
         .boolean()
         .describe("Must be true to confirm this destructive operation"),
     },
-    withErrorHandling(async (args) => {
-      if (!api) throw new Error("Please configure API connection first");
+    DESTRUCTIVE,
+    async (args) => {
       if (!args.confirm) {
         throw new Error(
           "Confirmation required for destructive operation. Set confirm: true to proceed."
         );
       }
       return notesResult(await api.deleteDocumentNote(args.id, args.note_id));
-    })
+    }
   );
 }

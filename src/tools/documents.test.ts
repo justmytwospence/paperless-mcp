@@ -1,40 +1,23 @@
 import assert from "node:assert/strict";
-import {
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  truncateSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { after, before, describe, test } from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport";
-import type {
-  CallToolResult,
-  JSONRPCMessage,
-} from "@modelcontextprotocol/sdk/types";
-import { PaperlessAPI } from "../api/PaperlessAPI";
-import { CustomField } from "../api/types";
-import {
-  buildBulkEditParameters,
-  registerDocumentTools,
-  validateFilePath,
-} from "./documents";
+import { describe, test } from "node:test";
+import { PaperlessAPI } from "../api/PaperlessAPI.js";
+import { CustomField } from "../api/types.js";
+import { buildBulkEditParameters, registerDocumentTools } from "./documents.js";
+import type { Client } from "@modelcontextprotocol/client";
+import type { CallToolResult } from "@modelcontextprotocol/server";
+import { parseToolText, withClient } from "../test/mcp.js";
 import {
   buildDocumentQueryString,
   customFieldQuerySchema,
   CustomFieldQuery,
   DOCUMENT_QUERY_PAPERLESS_FILTER_KEYS,
-} from "./utils/documentQuery";
+} from "./utils/documentQuery.js";
 import {
   buildDocumentResourceUri,
   buildThumbnailResourceUri,
-} from "./utils/resourceUri";
+} from "./utils/resourceUri.js";
 
 function getQueryParams(queryString: string) {
   return new URLSearchParams(queryString.replace(/^\?/, ""));
@@ -56,27 +39,6 @@ function getDocumentQueryParamsFromOpenApi() {
     section.matchAll(/^\s*-?\s*name:\s+(.+)$/gm),
     (match) => match[1]
   ).sort();
-}
-
-// ALLOWED_UPLOAD_PATHS is read from the environment at module load, so the
-// allowlist can only be exercised by re-importing the module with the env set.
-function validateFilePathWithAllowlist(
-  allowedPaths: string
-): typeof validateFilePath {
-  const modulePath = require.resolve("./documents");
-  const previous = process.env.PAPERLESS_MCP_UPLOAD_PATHS;
-  process.env.PAPERLESS_MCP_UPLOAD_PATHS = allowedPaths;
-  delete require.cache[modulePath];
-  try {
-    return require("./documents").validateFilePath;
-  } finally {
-    delete require.cache[modulePath];
-    if (previous === undefined) {
-      delete process.env.PAPERLESS_MCP_UPLOAD_PATHS;
-    } else {
-      process.env.PAPERLESS_MCP_UPLOAD_PATHS = previous;
-    }
-  }
 }
 
 test("buildBulkEditParameters sends Paperless bulk custom fields as id:value map", () => {
@@ -329,144 +291,9 @@ test("rejects invalid custom_field_query shapes", () => {
   );
 });
 
-describe("validateFilePath", () => {
-  let testDir: string;
-  let testFile: string;
-  let emptyFile: string;
-  let symlinkPath: string;
 
-  before(() => {
-    testDir = mkdtempSync(join(tmpdir(), "paperless-mcp-test-"));
-    testFile = join(testDir, "test.pdf");
-    writeFileSync(testFile, "%PDF-1.4\ntest content");
-    emptyFile = join(testDir, "empty.pdf");
-    writeFileSync(emptyFile, "");
-    symlinkPath = join(testDir, "link.pdf");
-    try {
-      symlinkSync(testFile, symlinkPath);
-    } catch {
-      // Skip if unsupported.
-    }
-  });
-
-  after(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  test("accepts a valid absolute file path", async () => {
-    await assert.doesNotReject(() => validateFilePath(testFile));
-  });
-
-  test("rejects relative paths", async () => {
-    await assert.rejects(() => validateFilePath("relative/path.pdf"), {
-      message: "file_path must be an absolute path",
-    });
-  });
-
-  test("rejects non-existent files", async () => {
-    await assert.rejects(
-      () => validateFilePath(join(testDir, "missing.pdf")),
-      { message: "File not found" }
-    );
-  });
-
-  test("rejects directories", async () => {
-    await assert.rejects(() => validateFilePath(testDir), {
-      message: "Path must point to a regular file",
-    });
-  });
-
-  test("rejects empty files", async () => {
-    await assert.rejects(() => validateFilePath(emptyFile), {
-      message: "File is empty",
-    });
-  });
-
-  test("resolves symlinks to the real file", async () => {
-    try {
-      await assert.doesNotReject(() => validateFilePath(symlinkPath));
-    } catch {
-      // Skip on systems without symlink support.
-    }
-  });
-
-  test("rejects files exceeding the maximum size", async () => {
-    const largeFile = join(testDir, "large.pdf");
-    writeFileSync(largeFile, "%PDF-1.4\n");
-    truncateSync(largeFile, 101 * 1024 * 1024);
-    await assert.rejects(() => validateFilePath(largeFile), {
-      message: /exceeds maximum allowed size/,
-    });
-  });
-
-  test("accepts files within allowed upload paths", async () => {
-    const validate = validateFilePathWithAllowlist(realpathSync(testDir));
-    await assert.doesNotReject(() => validate(testFile));
-  });
-
-  test("rejects files outside allowed upload paths", async () => {
-    const validate = validateFilePathWithAllowlist("/some/other/path");
-    await assert.rejects(() => validate(testFile), {
-      message: /outside allowed upload directories/,
-    });
-  });
-});
-
-class TestTransport implements Transport {
-  peer?: TestTransport;
-  onclose?: () => void;
-  onerror?: (error: Error) => void;
-  onmessage?: (message: JSONRPCMessage) => void;
-
-  async start(): Promise<void> {}
-
-  async send(message: JSONRPCMessage): Promise<void> {
-    queueMicrotask(() => this.peer?.onmessage?.(message));
-  }
-
-  async close(): Promise<void> {
-    this.onclose?.();
-  }
-}
-
-function createTransportPair() {
-  const clientTransport = new TestTransport();
-  const serverTransport = new TestTransport();
-  clientTransport.peer = serverTransport;
-  serverTransport.peer = clientTransport;
-  return { clientTransport, serverTransport };
-}
-
-function parseToolText(result: CallToolResult) {
-  const item = result.content?.[0];
-  if (!item || item.type !== "text") {
-    throw new Error("Expected text tool response");
-  }
-  return JSON.parse(item.text);
-}
-
-async function withDocumentClient(
-  api: PaperlessAPI,
-  run: (client: Client) => Promise<void>
-) {
-  const server = new McpServer({ name: "paperless-doc-test", version: "1.0.0" });
-  registerDocumentTools(server, api);
-
-  const client = new Client({
-    name: "paperless-doc-test-client",
-    version: "1.0.0",
-  });
-  const { clientTransport, serverTransport } = createTransportPair();
-
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-
-  try {
-    await run(client);
-  } finally {
-    await client.close();
-    await server.close();
-  }
+function withDocumentClient(api: PaperlessAPI, run: (client: Client) => Promise<void>) {
+  return withClient((server) => registerDocumentTools(server, api), run);
 }
 
 interface DocumentApiCalls {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { setPublicUrl } from "../api/documentLinks";
-import { deriveFilename, isPublicAddress, looksLikeHtml, summarizeTask } from "./urlUpload";
+import { setPublicUrl } from "../api/documentLinks.js";
+import { deriveFilename, isPublicAddress, looksLikeHtml, summarizeTask } from "./urlUpload.js";
 
 const pdf = Buffer.from("%PDF-1.7\n...");
 

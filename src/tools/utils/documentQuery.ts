@@ -97,10 +97,13 @@ export const customFieldQuerySchema = z
     }
   }) as unknown as z.ZodType<CustomFieldQuery>;
 
+// Each member carries a description so zod's JSON Schema converter keeps the
+// anyOf: a union of bare primitives collapses into an array-form `type`, which
+// strict MCP clients reject (see schemaCompat.test.ts).
 const paperlessFilterScalarSchema = z.union([
-  z.string(),
-  z.number(),
-  z.boolean(),
+  z.string().describe("string value"),
+  z.number().describe("number value"),
+  z.boolean().describe("boolean value"),
 ]);
 
 export const paperlessFilterValueSchema = z.union([

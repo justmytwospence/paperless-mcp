@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getMonetaryValidationError } from "./monetary";
+import { getMonetaryValidationError } from "./monetary.js";
 
 test("returns null for non-monetary strings", () => {
   assert.equal(getMonetaryValidationError("hello"), null);

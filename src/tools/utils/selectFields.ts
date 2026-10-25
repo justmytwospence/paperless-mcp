@@ -1,9 +1,9 @@
-import { PaperlessAPI } from "../../api/PaperlessAPI";
+import { PaperlessAPI } from "../../api/PaperlessAPI.js";
 import {
   CustomField,
   CustomFieldInstanceRequest,
   CustomFieldValue,
-} from "../../api/types";
+} from "../../api/types.js";
 
 /**
  * Encoding Paperless expects for a select value. On the supported API versions

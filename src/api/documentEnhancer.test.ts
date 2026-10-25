@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CallToolResult } from "@modelcontextprotocol/sdk/types";
-import { convertDocsWithNames } from "./documentEnhancer";
-import { DocumentsResponse } from "./types";
-import { createDocument, createPaperlessApiMock } from "../test/mocks/paperlessApi";
+import type { CallToolResult } from "@modelcontextprotocol/server";
+import { convertDocsWithNames } from "./documentEnhancer.js";
+import { DocumentsResponse } from "./types.js";
+import { createDocument, createPaperlessApiMock } from "../test/mocks/paperlessApi.js";
 
 const LARGE_DOCUMENT_COUNT = 709;
 const MAX_RESPONSE_SIZE_BYTES = 2000;

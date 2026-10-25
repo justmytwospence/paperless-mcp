@@ -1,8 +1,8 @@
-import { CallToolResult } from "@modelcontextprotocol/sdk/types";
-import { PaperlessAPI } from "./PaperlessAPI";
-import { Document, DocumentsResponse } from "./types";
-import { NamedItem } from "./utils";
-import { documentUrl } from "./documentLinks";
+import type { CallToolResult } from "@modelcontextprotocol/server";
+import { PaperlessAPI } from "./PaperlessAPI.js";
+import { Document, DocumentsResponse } from "./types.js";
+import { NamedItem } from "./utils.js";
+import { documentUrl } from "./documentLinks.js";
 
 interface CustomField {
   field: number;

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveUpload } from "./fileUpload";
+import { resolveUpload } from "./fileUpload.js";
 
 test("uploads are confined to an agent folder under the root", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "uploads-"));

@@ -1,38 +1,6 @@
-# Dependencies
 node_modules/
-bun.lock
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Build output
 dist/
-build/
-coverage/
-package/
-*.dxt
-
-# Logs
-logs/
+.env
+.env.*
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# OS
 .DS_Store
-Thumbs.db
-
-# Editor directories and files
-.idea/
-.vscode/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# Devfiles / Temp stuff
-temp/

@@ -1,11 +1,11 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { PaperlessAPI } from "../../api/PaperlessAPI";
-import { CustomField } from "../../api/types";
+import { PaperlessAPI } from "../../api/PaperlessAPI.js";
+import { CustomField } from "../../api/types.js";
 import {
   resolveSelectCustomFieldValue,
   resolveSelectCustomFieldValues,
-} from "./selectFields";
+} from "./selectFields.js";
 
 const LEGACY_SELECT_FIELD: CustomField = {
   id: 2,

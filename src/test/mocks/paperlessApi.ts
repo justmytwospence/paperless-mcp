@@ -1,5 +1,5 @@
-import { PaperlessAPI } from "../../api/PaperlessAPI";
-import { Document } from "../../api/types";
+import { PaperlessAPI } from "../../api/PaperlessAPI.js";
+import { Document } from "../../api/types.js";
 
 function emptyPaginationResponse<T>(results: T[] = []) {
   return {

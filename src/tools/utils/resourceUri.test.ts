@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildDocumentResourceUri,
   buildThumbnailResourceUri,
-} from "./resourceUri";
+} from "./resourceUri.js";
 
 test("buildDocumentResourceUri mirrors the REST download path", () => {
   const uri = buildDocumentResourceUri(1, "doc.pdf");

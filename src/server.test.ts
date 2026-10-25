@@ -1,57 +1,57 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import type express from "express";
-import { getBearerToken } from "./server";
+import { test } from "node:test";
+import { PaperlessAPI } from "./api/PaperlessAPI.js";
+import type { SemanticSearch } from "./search/search.js";
+import { createServerFactory } from "./server.js";
+import { withServer } from "./test/mcp.js";
 
-function reqWith(authorization?: string): express.Request {
-  return {
-    headers: authorization ? { authorization } : {},
-  } as unknown as express.Request;
+const api = new PaperlessAPI("http://paperless.test", "test-token");
+
+const CORE = [
+  "bulk_edit_documents",
+  "create_correspondent",
+  "create_document_note",
+  "create_document_type",
+  "create_tag",
+  "delete_document_note",
+  "download_document",
+  "get_document",
+  "get_document_content",
+  "get_document_thumbnail",
+  "get_task_status",
+  "list_correspondents",
+  "list_custom_fields",
+  "list_document_notes",
+  "list_document_types",
+  "list_documents",
+  "list_tags",
+  "post_document_from_url",
+  "query_documents",
+  "update_document",
+  "update_tag",
+];
+
+async function toolNames(search?: Promise<SemanticSearch>) {
+  let names: string[] = [];
+  await withServer(createServerFactory({ api, publicUrl: "http://p.test", search })(), async (client) => {
+    names = (await client.listTools()).tools.map((t) => t.name).sort();
+  });
+  return names;
 }
 
-test("client Bearer token takes precedence over the server token", () => {
-  const token = getBearerToken(reqWith("Bearer client-token"), {
-    fallbackToken: "server-token",
-    allowAnonymous: true,
-  });
-  assert.equal(token, "client-token");
+test("the server offers exactly the curated tool set", async () => {
+  assert.deepEqual(await toolNames(), CORE);
 });
 
-test("client Bearer token is used even when anonymous access is disabled", () => {
-  const token = getBearerToken(reqWith("Bearer client-token"), {
-    fallbackToken: "server-token",
-    allowAnonymous: false,
-  });
-  assert.equal(token, "client-token");
+test("semantic_search is offered when the index is enabled", async () => {
+  const names = await toolNames(new Promise<SemanticSearch>(() => {}));
+  assert.deepEqual(names, [...CORE, "semantic_search"].sort());
 });
 
-test("falls back to the server token only when anonymous access is allowed", () => {
-  const token = getBearerToken(reqWith(), {
-    fallbackToken: "server-token",
-    allowAnonymous: true,
-  });
-  assert.equal(token, "server-token");
-});
-
-test("no header without anonymous access yields no token (request is rejected)", () => {
-  const token = getBearerToken(reqWith(), {
-    fallbackToken: "server-token",
-    allowAnonymous: false,
-  });
-  assert.equal(token, undefined);
-});
-
-test("non-Bearer Authorization scheme never leaks the server token by default", () => {
-  const token = getBearerToken(reqWith("Token server-token"), {
-    fallbackToken: "server-token",
-    allowAnonymous: false,
-  });
-  assert.equal(token, undefined);
-});
-
-test("anonymous access with no configured server token yields no token", () => {
-  const token = getBearerToken(reqWith(), {
-    allowAnonymous: true,
-  });
-  assert.equal(token, undefined);
+test("nothing that deletes documents or taxonomy is offered", async () => {
+  const names = await toolNames(new Promise<SemanticSearch>(() => {}));
+  assert.deepEqual(
+    names.filter((n) => n.startsWith("delete_")),
+    ["delete_document_note"]
+  );
 });

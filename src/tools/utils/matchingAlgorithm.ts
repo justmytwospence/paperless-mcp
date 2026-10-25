@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   MATCHING_ALGORITHM_DESCRIPTION,
   MatchingAlgorithm,
-} from "../../api/types";
+} from "../../api/types.js";
 
 // The 0-6 range the API declares is exactly the set `MatchingAlgorithm`
 // enumerates, so narrowing to it after the check lets the PaperlessAPI request
