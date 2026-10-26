@@ -7,10 +7,19 @@ JSON document.
 
 | Variable | Default | |
 |---|---|---|
-| `PAPERLESS_URL` | required | Paperless base URL the server calls, e.g. `http://paperless:8000` |
+| `PAPERLESS_URL` | required | Direct Paperless base URL, e.g. `http://paperless:8000`; API redirects are rejected to prevent credential forwarding or write replay |
 | `PAPERLESS_API_KEY` | required | API token. The server acts as this user: it sees what the user sees, and uploads are owned by them |
 | `PAPERLESS_PUBLIC_URL` | `PAPERLESS_URL` | The URL a browser uses, for the `web_url` links in results (useful when `PAPERLESS_URL` is an internal Docker name) |
 | `PAPERLESS_API_VERSION` | `9` | REST API version sent in `Accept`. 9 works with Paperless-ngx 2.x and 3.x |
+| `PAPERLESS_MCP_REQUEST_CONCURRENCY` | `4` | Positive integer; aggregate active upstream requests across libraries, tools, resources, source downloads and indexing |
+| `PAPERLESS_MCP_REQUEST_MAX_QUEUE` | `64` | Non-negative integer; bounded admission queue (0 fails immediately when busy) |
+| `PAPERLESS_MCP_REQUEST_TIMEOUT_MS` | `30000` | Positive integer up to 2147483647; timeout for each admitted upstream request including body consumption |
+
+The queue deadline is 30 seconds. Only Paperless GET/HEAD 429 responses may retry once
+after a cooldown of at most 10 seconds; writes are never replayed. These are local
+process limits, not a known Paperless REST quota. The zero-call
+`paperless://library/load-status` resource reports observed cooldowns and local load.
+See [Discovery and request policy](discovery.md) for costs and timeout/retry semantics.
 
 ## Transport
 
@@ -67,10 +76,13 @@ A library is one MCP endpoint over part of Paperless, chosen by document type:
 
 - every list, search (keyword and semantic), read, note, download and edit is confined to
   it, and a document outside it answers exactly like one that does not exist;
-- edits cannot give a document a type outside the library;
+- edits cannot give a document a type outside the library; similarity seeds and bulk
+  metadata-source document references must also belong to it;
 - uploads are filed into it (with its upload type, see below);
 - its semantic index holds only its documents;
-- `list_document_types` shows only its types, and `create_document_type` is not offered.
+- `list_document_types` shows only its types, and `create_document_type` is not offered;
+- metadata/content/notes/file resource reads use the same scoped methods as tools;
+  discovery/prompts/status resources never enumerate documents or sibling libraries.
 
 Tags, correspondents, custom fields and storage paths are shared across Paperless, so a
 library sees only those its own documents use, plus any no document uses yet (one just

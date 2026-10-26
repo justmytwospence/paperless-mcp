@@ -36,7 +36,7 @@ Agent:  [semantic_search] Three documents cover it, with the passages that match
 - **No LLM inside.** Every tool returns source material; the agent you already use does
   the reasoning. Nothing here spends tokens or sends your documents to a model provider.
 - **Small and inspectable.** One container, one SQLite file per library, a pinned and
-  checksummed embedding model inside the image, about 110 tests.
+  checksummed embedding model inside the image, and an offline test suite.
 
 ## Quick start
 
@@ -134,8 +134,16 @@ library can also be set with environment variables. See
 | Notes | `list_document_notes`, `create_document_note`, `delete_document_note` |
 | Taxonomy | `list_tags`, `create_tag`, `update_tag`, `list_correspondents`, `create_correspondent`, `list_document_types`, `create_document_type`, `list_custom_fields` |
 
-Every tool carries MCP annotations (read-only, destructive), so clients can auto-approve
-reads and ask before writes. Arguments and behaviour: [Tools](docs/tools.md).
+Every tool declares read-only, destructive, idempotent and open-world hints, including
+replacement-capable updates. These are advisory, not authorization or approval gates.
+Arguments and behaviour: [Tools](docs/tools.md).
+
+Clients can also discover library-specific usage, search/index status and zero-call
+local load resources, bounded scoped metadata/OCR/notes templates, and find/read/cite/
+filing-review prompts. No discovery or prompt retrieval enumerates documents, calls
+Paperless or starts processing. Upstream calls have shared concurrency/queue bounds,
+body-inclusive timeouts and a safe read-only 429 retry; writes are never replayed.
+Paperless's general REST quota remains unknown. See [Discovery and request policy](docs/discovery.md).
 
 ## Documentation
 
@@ -143,6 +151,7 @@ reads and ask before writes. Arguments and behaviour: [Tools](docs/tools.md).
 - [Deployment](docs/deployment.md): Docker Compose, stdio clients, putting it behind auth
 - [Semantic search](docs/semantic-search.md): indexing, sizing, coverage, privacy
 - [Tools](docs/tools.md): the full tool reference
+- [Discovery and request policy](docs/discovery.md): resources, templates, prompts, request costs and local load limits
 - [Changelog](CHANGELOG.md)
 
 ## Compared with other Paperless MCP servers

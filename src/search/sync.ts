@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { PaperlessAPI } from "../api/PaperlessAPI.js";
+import { RequestThrottledError } from "../api/requestPolicy.js";
 import type { CustomField, Document, Note } from "../api/types.js";
 import type { Embedder } from "./embed.js";
 import type { ChunkKind, DocRecord, VectorStore } from "./store.js";
@@ -36,7 +37,8 @@ async function withRetry<T>(fn: () => Promise<T>, delayMs: number, attempts = 3)
     try {
       return await fn();
     } catch (err) {
-      if (i >= attempts) throw err;
+      // The HTTP layer has already considered the single safe 429 retry.
+      if (err instanceof RequestThrottledError || i >= attempts) throw err;
       await new Promise((r) => setTimeout(r, delayMs * i * i));
     }
   }

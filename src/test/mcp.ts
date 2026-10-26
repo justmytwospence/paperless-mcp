@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport, McpServer } from "@modelcontextprotocol/server";
-import type { CallToolResult } from "@modelcontextprotocol/server";
+import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/server";
 
 /** Connects an in-memory client to a server set up by `register`, runs `run`, then closes both. */
 export async function withClient(
@@ -25,6 +25,12 @@ export async function withServer(
     await client.close();
     await server.close();
   }
+}
+
+export function parseResourceText(result: ReadResourceResult) {
+  const item = result.contents[0];
+  if (!item || !("text" in item)) throw new Error("Expected text resource response");
+  return JSON.parse(item.text);
 }
 
 export function parseToolText(result: unknown) {

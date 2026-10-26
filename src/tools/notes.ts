@@ -47,7 +47,7 @@ export function registerNoteTools(server: McpServer, api: PaperlessAPI) {
         .boolean()
         .describe("Must be true to confirm this destructive operation"),
     },
-    DESTRUCTIVE,
+    { ...DESTRUCTIVE, idempotentHint: true },
     async (args) => {
       if (!args.confirm) {
         throw new Error(

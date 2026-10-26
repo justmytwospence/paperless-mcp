@@ -7,6 +7,7 @@ import path from "node:path";
 import { z } from "zod";
 import { documentUrl } from "../api/documentLinks.js";
 import { PaperlessAPI } from "../api/PaperlessAPI.js";
+import type { RequestPolicy } from "../api/requestPolicy.js";
 import { MAX_FILE_SIZE_BYTES } from "../config.js";
 import { jsonResult, OPEN_WRITE, READ_ONLY, registerTool } from "./utils/register.js";
 
@@ -21,8 +22,8 @@ import { jsonResult, OPEN_WRITE, READ_ONLY, registerTool } from "./utils/registe
 const FETCH_TIMEOUT_MS = 180 * 1000;
 const MAX_REDIRECTS = 5;
 export const MAX_WAIT_SECONDS = 120;
-// Many MCP clients abandon a tool call after 60 s, so a call never runs longer
-// than this, download time included; a slower outcome is reported as pending.
+// Polling's budget is measured from call start. This does not cancel an in-flight
+// source download/upload; those have their own per-request/admission deadlines.
 export const CALL_BUDGET_SECONDS = 45;
 const DEFAULT_WAIT_SECONDS = 30;
 const POLL_INTERVAL_MS = 2000;
@@ -134,7 +135,7 @@ function tooLarge(bytes: number): Error {
   );
 }
 
-function requestOnce(url: URL, deadline: number): Promise<Hop> {
+function requestOnce(url: URL, deadline: number, signal: AbortSignal): Promise<Hop> {
   return new Promise((resolve, reject) => {
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
@@ -142,6 +143,7 @@ function requestOnce(url: URL, deadline: number): Promise<Hop> {
     }
     const mod = url.protocol === "https:" ? https : http;
     const req = mod.get(url, {
+      signal,
       lookup: guardedLookup as any,
       headers: { "User-Agent": USER_AGENT, Accept: "application/pdf,*/*;q=0.8" },
       // A fresh agent per request: a pooled socket would skip lookup() entirely.
@@ -158,12 +160,15 @@ function requestOnce(url: URL, deadline: number): Promise<Hop> {
     req.on("response", (res) => {
       const status = res.statusCode || 0;
       if (status >= 300 && status < 400 && res.headers.location) {
+        const location = res.headers.location;
+        // Keep admission/deadline until the redirect body is drained as well.
+        res.on("error", fail);
+        res.on("end", () => { clearTimeout(timer); resolve({ location }); });
         res.resume();
-        clearTimeout(timer);
-        return resolve({ location: res.headers.location });
+        return;
       }
       if (status < 200 || status >= 300) {
-        res.resume();
+        res.destroy();
         return fail(new Error(`GET ${url.href} returned HTTP ${status}`));
       }
       const declared = Number(res.headers["content-length"]);
@@ -195,7 +200,7 @@ function requestOnce(url: URL, deadline: number): Promise<Hop> {
   });
 }
 
-async function fetchDocument(rawUrl: string): Promise<Fetched> {
+async function fetchDocument(rawUrl: string, policy: RequestPolicy): Promise<Fetched> {
   let current: URL;
   try {
     current = new URL(rawUrl);
@@ -205,7 +210,7 @@ async function fetchDocument(rawUrl: string): Promise<Fetched> {
   const deadline = Date.now() + FETCH_TIMEOUT_MS;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     assertFetchable(current);
-    const res = await requestOnce(current, deadline);
+    const res = await policy.run("GET", (signal) => requestOnce(current, deadline, signal));
     if ("location" in res) {
       current = new URL(res.location, current);
       continue;
@@ -454,8 +459,8 @@ export const UPLOAD_METADATA_SHAPE = {
     .max(MAX_WAIT_SECONDS)
     .optional()
     .describe(
-      `How long the call may take, download included, waiting for Paperless to consume the file (0-${MAX_WAIT_SECONDS}, default ${DEFAULT_WAIT_SECONDS}; ` +
-        `capped at ${CALL_BUDGET_SECONDS}, as many clients give up after 60 s). 0 returns the task id immediately; ` +
+      `Polling budget measured from call start (0-${MAX_WAIT_SECONDS}, default ${DEFAULT_WAIT_SECONDS}; ` +
+        `capped at ${CALL_BUDGET_SECONDS}s). Does not cancel in-flight download/upload HTTP requests. 0 returns the task id immediately after upload; ` +
         "a slower outcome comes back as 'pending' with a task_id for get_task_status."
     ),
 };
@@ -469,7 +474,7 @@ export function registerUrlUploadTools(server: McpServer, api: PaperlessAPI) {
       "Use the DIRECT file link, not a landing page (e.g. https://arxiv.org/pdf/<id>, not /abs/<id>); " +
       "an HTML response is rejected. Only public http(s) URLs are fetched. " +
       "Set 'title' (or a descriptive 'filename' like 'Author Year - Title.pdf'), otherwise the " +
-      "title starts as the URL's filename. By default waits up to 30s (at most 45s, download included) for Paperless to finish " +
+      "title starts as the URL's filename. By default polls within 30s (at most 45s, measured from call start) for Paperless to finish " +
       "consuming and reports the outcome: 'created' with document_id, 'duplicate' with the existing " +
       "document (re-adding a paper already in the library is rejected, not duplicated), 'failed', or " +
       "'pending' -- check a pending task later with get_task_status. When reporting a created " +
@@ -489,7 +494,7 @@ export function registerUrlUploadTools(server: McpServer, api: PaperlessAPI) {
     OPEN_WRITE,
     async (args) => {
       const startedAt = Date.now();
-      const fetched = await fetchDocument(args.url);
+      const fetched = await fetchDocument(args.url, api.requestPolicy);
       if (fetched.body.length === 0) {
         throw new Error(`${fetched.finalUrl} returned an empty body.`);
       }

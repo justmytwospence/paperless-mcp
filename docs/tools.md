@@ -1,9 +1,16 @@
 # Tools
 
-Every tool carries MCP annotations: read-only tools are marked `readOnlyHint`, and the
-two that can discard something (`bulk_edit_documents` and `delete_document_note`) are
-marked `destructiveHint`, so a client can auto-approve reads and ask before the rest. Document results include `web_url`, a link to the document in the
-Paperless web UI; the server's instructions ask agents to cite documents with it.
+Every tool declares all four MCP hints. Remote Paperless reads/writes use
+`openWorldHint: true`; the two URI-generating tools are local reads. Replacement-capable
+`update_document` and `update_tag`, bulk edits and note deletion are destructive.
+Assignment updates and note deletion are idempotent; creates/uploads/bulk workflows are
+not. Hints are advisory, not authorization, approval or spending limits.
+
+Document results include `web_url`, a link to the document in the Paperless web UI;
+the server's instructions ask agents to cite documents with it. Legacy text results
+remain unchanged alongside structured JSON (arrays under `items`, URI results under
+`uri`). See [Discovery and request policy](discovery.md) for exact resource/prompt
+inventories, result contracts, request costs, timeouts and safe retries.
 
 On a server with [libraries](configuration.md#libraries), every tool works inside the
 library: documents outside it do not exist as far as the tools are concerned.
@@ -30,7 +37,9 @@ Each result: `id`, `title`, `web_url`, `created_date`, `correspondent`, `documen
 `tags`, `score` (fused), `similarity` (cosine, or null if it matched by keyword only),
 `keyword_rank`, `matched_by` (`semantic`, `keyword`), and `passages` (`text`, `kind`:
 `content` or `meta`, `offset` and `length` in the document text, `similarity`). The
-response ends with `index` coverage.
+response ends with `index` coverage and `warnings` (empty normally; a failed keyword
+leg is explicitly reported when only the semantic leg remains). Coverage is not proof
+that every current/permitted document was searched.
 
 ### `query_documents`
 
@@ -72,9 +81,9 @@ public addresses are fetched (see [Security](deployment.md#security)).
 
 Metadata: `title`, `filename`, `created`, `correspondent`, `document_type`,
 `storage_path`, `tags`, `archive_serial_number`, `custom_fields` (ids). `wait_seconds`
-(default 30) waits for Paperless to consume the file and reports the outcome. It bounds the
-whole call, download included, and is capped at 45 seconds, since many MCP clients give
-up on a call after 60; a slower outcome comes back as `pending`:
+(default 30) sets the polling budget measured from call start, capped at 45 seconds.
+It does not cancel an in-flight source download or multipart POST; those use the local
+per-request/admission deadlines. A slower consume outcome comes back as `pending`:
 
 - `created`, with `document_id` and `web_url`;
 - `duplicate`, with the existing document it matched (Paperless refuses duplicates). On a
@@ -101,8 +110,10 @@ uploads; another library's task answers like an unknown id.
 
 Change `title`, `correspondent`, `document_type`, `storage_path`, `tags`, `content`,
 `created`, `archive_serial_number`, `owner` or `custom_fields`. Omitted fields are left
-alone, with one exception: `custom_fields` replaces the document's whole set. To change
-one field, use `bulk_edit_documents` with `modify_custom_fields`.
+alone; supplied `tags` and `custom_fields` replace their entire sets. This can overwrite
+OCR, ownership and filing metadata: review current state and loss before writing. To
+change one custom field additively, use `bulk_edit_documents` with `modify_custom_fields`.
+Writes, including uploads, are never automatically replayed after an ambiguous failure.
 
 Custom field values: select fields take the option's label (translated to what Paperless
 stores); monetary fields take a currency prefix (`USD10.00`, not `10.00$`); document link
@@ -114,7 +125,8 @@ One operation over many documents: `set_correspondent`, `set_document_type`,
 `set_storage_path`, `add_tag`, `remove_tag`, `modify_tags` (`add_tags`, `remove_tags`),
 `modify_custom_fields` (`add_custom_fields`, `remove_custom_fields`), `reprocess`,
 `set_permissions` (`set_permissions`, `owner`, `merge`), `merge`, `split`, `rotate`,
-`delete_pages`.
+`delete_pages`. The whole tool is write-capable/destructive even when selecting a
+non-destructive method; annotations do not replace the existing `confirm` check.
 
 `pages` is a list of pages and ranges such as `"2,4-6"`: for `split`, each group becomes
 a new document; for `delete_pages`, those pages are removed.

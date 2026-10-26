@@ -10,7 +10,7 @@ import {
   LIST_DOCUMENTS_ARGS_SHAPE,
   QUERY_DOCUMENTS_ARGS_SHAPE,
 } from "./utils/documentQuery.js";
-import { DESTRUCTIVE, jsonResult, READ_ONLY, registerTool, WRITE } from "./utils/register.js";
+import { DESTRUCTIVE, LOCAL_READ_ONLY, READ_ONLY, registerTool, REPLACE } from "./utils/register.js";
 import { validateCustomFields } from "./utils/monetary.js";
 import { resolveSelectCustomFieldValues } from "./utils/selectFields.js";
 import { CUSTOM_FIELD_VALUE_DESCRIPTION } from "./utils/descriptions.js";
@@ -312,7 +312,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
     "get_document",
     "Get a specific document by ID with full details including correspondent, document type, tags, and custom fields. Note: Document content is excluded from results by default. Use 'get_document_content' to retrieve content when needed." + LINK_GUIDANCE,
     {
-      id: z.number(),
+      id: z.number().int().positive(),
     },
     READ_ONLY,
     async (args) => {
@@ -326,7 +326,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
     "get_document_content",
     "Get the text content of a specific document by ID. Use this when you need to read or analyze the actual document text." + LINK_GUIDANCE,
     {
-      id: z.number(),
+      id: z.number().int().positive(),
       offset: z
         .number()
         .int()
@@ -372,7 +372,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
       id: z.number().int().positive(),
       original: z.boolean().optional(),
     },
-    READ_ONLY,
+    LOCAL_READ_ONLY,
     async (args) => {
       const uri = buildDocumentResourceUri(args.id, {
         original: args.original,
@@ -405,7 +405,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
     {
       id: z.number().int().positive(),
     },
-    READ_ONLY,
+    LOCAL_READ_ONLY,
     async (args) => {
       const uri = buildThumbnailResourceUri(args.id);
       return {
@@ -431,9 +431,9 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
   registerTool(
     server,
     "update_document",
-    "Update a specific document with new values (title, correspondent, document type, storage path, tags, custom fields, and more). Top-level fields you omit are left unchanged. IMPORTANT: custom_fields is the exception — see its parameter description; it replaces the document's entire custom-field set.",
+    "Update a specific document with new values (title, correspondent, document type, storage path, tags, custom fields, and more). Can overwrite content, ownership and filing metadata. Omitted top-level fields stay unchanged; supplied tags and custom_fields replace their entire sets. Review current values before writing; use bulk modify_custom_fields for additive field edits.",
     {
-      id: z.number().describe("The ID of the document to update"),
+      id: z.number().int().positive().describe("The ID of the document to update"),
       title: z
         .string()
         .max(128)
@@ -499,7 +499,7 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
           "Custom field values for the document. ⚠️ REPLACES the document's entire custom-field set — any field not included here will be CLEARED. To update or add a single field without losing the others, first call get_document to read the existing custom_fields, then pass the full merged array. To add/set fields additively without fetching, use bulk_edit_documents with method 'modify_custom_fields' instead."
         ),
     },
-    WRITE,
+    REPLACE,
     async (args) => {
       const { id, ...updateData } = args;
 

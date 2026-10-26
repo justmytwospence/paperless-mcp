@@ -32,6 +32,11 @@ export const DOCUMENT_TYPES = list("PAPERLESS_MCP_DOCUMENT_TYPES");
 export const EXCLUDE_DOCUMENT_TYPES = list("PAPERLESS_MCP_EXCLUDE_DOCUMENT_TYPES");
 export const UPLOAD_DOCUMENT_TYPE = process.env.PAPERLESS_MCP_UPLOAD_DOCUMENT_TYPE || "";
 
+// Shared across libraries, tools, resources, source downloads and background sync.
+export const REQUEST_TIMEOUT_MS = int("PAPERLESS_MCP_REQUEST_TIMEOUT_MS", 30_000);
+export const REQUEST_CONCURRENCY = int("PAPERLESS_MCP_REQUEST_CONCURRENCY", 4);
+export const REQUEST_MAX_QUEUE = int("PAPERLESS_MCP_REQUEST_MAX_QUEUE", 64);
+
 export const MAX_FILE_SIZE_BYTES = int("PAPERLESS_MCP_MAX_FILE_BYTES", 100 * 1024 * 1024);
 export const UPLOAD_ROOT = process.env.PAPERLESS_MCP_UPLOAD_ROOT || "";
 

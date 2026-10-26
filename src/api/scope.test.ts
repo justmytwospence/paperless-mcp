@@ -126,6 +126,17 @@ test("documents outside the scope look like documents that do not exist", async 
   assert.ok(!calls.some((c) => c.method !== "GET" && /documents\/2\//.test(c.url.pathname)), "no write reached Paperless");
 });
 
+test("similarity seeds and bulk metadata sources cannot cross the scope, even with scoped output filters", async () => {
+  const api = scoped();
+  for (const id of [2, 99]) {
+    await assert.rejects(api.getDocuments(`?more_like_id=${id}`), OutOfScopeError);
+    await assert.rejects(api.bulkEditDocuments([1], "merge", { metadata_document_id: id }), OutOfScopeError);
+  }
+  assert.ok(!calls.some((c) => c.url.searchParams.has("more_like_id") || c.url.pathname === "/api/documents/bulk_edit/"));
+  await api.getDocuments("?more_like_id=1");
+  await api.bulkEditDocuments([1], "merge", { metadata_document_id: 1 });
+});
+
 test("a document cannot be moved out of the scope", async () => {
   const api = scoped();
   await assert.rejects(api.updateDocument(1, { document_type: 17 }), OutOfScopeError);

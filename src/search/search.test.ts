@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { setPublicUrl } from "../api/documentLinks.js";
+import { RequestThrottledError } from "../api/requestPolicy.js";
 import { fakeEmbedder } from "../test/fakeEmbedder.js";
 import { FakePaperless } from "../test/fakePaperless.js";
 import { SemanticSearch } from "./search.js";
@@ -80,6 +81,39 @@ test("hybrid fuses keyword hits and marks how each document matched", async () =
   assert.deepEqual(bill.matched_by, ["semantic", "keyword"]);
   assert.equal(bill.keyword_rank, 1);
   assert.equal(res.results[0].id, 2);
+});
+
+test("a failed keyword leg reports partial search instead of silently implying hybrid success", async () => {
+  const { syncer, paperless, embedder, store } = setup();
+  await syncer.reconcile();
+  const api = paperless.api;
+  const getDocuments = api.getDocuments.bind(api);
+  api.getDocuments = (q = "") => q.includes("?query=") ? Promise.reject(new Error("private upstream error")) : getDocuments(q);
+  const search = new SemanticSearch(api, store, embedder, () => ({ ...syncer.getStatus(), last_error: "pending index gap" }));
+  const result = await search.search({ query: "invoice" });
+  assert.ok(result.results.length);
+  assert.equal(result.index.complete, false, "counts alone must not hide an index error");
+  assert.deepEqual(result.warnings, ["Keyword search unavailable; results use the semantic leg only."]);
+  assert.ok(result.results.every((d) => !d.matched_by.includes("keyword")));
+  assert.ok(!JSON.stringify(result).includes("private upstream error"));
+  store.close();
+});
+
+test("indexing does not multiply the HTTP layer's exhausted 429 retries", async () => {
+  const { paperless, embedder, store } = setup();
+  const api = paperless.api;
+  const getDocuments = api.getDocuments.bind(api);
+  let throttled = 0;
+  api.getDocuments = (q = "") => {
+    if (q.includes("id__in=2&")) { throttled++; return Promise.reject(new RequestThrottledError(Date.now() + 1000)); }
+    return getDocuments(q);
+  };
+  const syncer = new Syncer(api, store, embedder, { chunkTokens: 40, overlapTokens: 8, retryDelayMs: 0, log: () => {} });
+  await syncer.reconcile();
+  assert.equal(throttled, 1);
+  assert.equal(syncer.getStatus().documents_indexed, 2);
+  assert.match(syncer.getStatus().last_error!, /429/);
+  store.close();
 });
 
 test("unchanged documents are not re-embedded; a tag change re-embeds only metadata", async () => {

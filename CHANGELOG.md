@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+- Complete MCP annotations and titles; replacement-capable document/tag updates are
+  destructive, assignment updates/note deletion are idempotent, and local URI generation
+  is distinguished from upstream reads. JSON results now include structured data without
+  changing legacy text/resource blocks; runtime schemas and existing consent checks remain.
+- Add library-specific info/search guides, cached index coverage and zero-call local load
+  resources, bounded scoped metadata/OCR/notes templates, and find/read/cite/filing-review
+  prompts. Discovery never enumerates documents or sibling libraries, calls Paperless,
+  starts indexing or applies a filing proposal. Similarity seeds and bulk metadata-source
+  document references are also scope-checked, preventing indirect cross-library reads.
+- Share bounded upstream admission across libraries, tools, resource/source downloads and
+  indexing: four active requests, 64 queued, 30-second queue and body-inclusive request
+  deadlines by default. Concurrency/queue/request timeout are configurable. Observe 429
+  Retry-After cooldowns and retry only safe Paperless GET/HEAD reads once for short waits;
+  never replay writes/uploads or ambiguous HTTP failures (API redirects are rejected). Expose local policy/counters,
+  not an invented REST quota. Indexing does not multiply exhausted 429 retries.
+- Bound binary resource downloads to 16 MiB (use Paperless UI links for larger files).
+  Explicitly disclose failed keyword search legs in semantic results and document that
+  upload polling budgets do not cancel in-flight source/upload HTTP.
+- Add offline wire inventories, cross-library resource tests with real clients/scoped API,
+  fake-clock admission/backoff/deadline tests and release-check gating.
+
 ## 3.3.0
 
 - Libraries no longer show each other's taxonomy. Tags, correspondents, custom fields

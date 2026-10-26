@@ -11,6 +11,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { Context } from "hono";
 import { setPublicUrl } from "./api/documentLinks.js";
 import { PaperlessAPI } from "./api/PaperlessAPI.js";
+import { RequestPolicy } from "./api/requestPolicy.js";
 import * as config from "./config.js";
 import { type Library, loadLibraries } from "./libraries.js";
 import type { Embedder } from "./search/embed.js";
@@ -50,11 +51,17 @@ interface Served {
   syncer?: Syncer;
 }
 
+const requestPolicy = new RequestPolicy({
+  concurrency: config.REQUEST_CONCURRENCY,
+  maxQueue: config.REQUEST_MAX_QUEUE,
+  timeoutMs: config.REQUEST_TIMEOUT_MS,
+});
 const served: Served[] = libraries.map((library) => {
   const api = new PaperlessAPI(config.PAPERLESS_URL, config.PAPERLESS_API_KEY, {
     documentTypes: library.documentTypes,
     excludeDocumentTypes: library.excludeDocumentTypes,
     uploadDocumentType: library.uploadDocumentType,
+    requestPolicy,
   });
   const scoped = library.documentTypes.length > 0 || library.excludeDocumentTypes.length > 0;
   const entry: Served = { library, createServer: () => null as never };
@@ -90,6 +97,7 @@ const served: Served[] = libraries.map((library) => {
     api,
     publicUrl: config.PAPERLESS_PUBLIC_URL,
     search,
+    indexStatus: () => entry.syncer?.getStatus(),
     scoped,
     library: { name: library.name, description: library.description },
     uploadRoot: library.uploadRoot,

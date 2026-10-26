@@ -106,6 +106,7 @@ export class SemanticSearch {
     }
 
     const keywordRank = new Map<number, number>();
+    const warnings: string[] = [];
     if (hybrid) {
       try {
         const res = await this.api.getDocuments(
@@ -113,8 +114,8 @@ export class SemanticSearch {
         );
         (res.results || []).forEach((d, i) => keywordRank.set(d.id, i + 1));
       } catch {
-        // A query the full-text parser rejects (stray quotes, operators) still
-        // gets semantic results.
+        // Preserve useful vector results but disclose the missing keyword leg.
+        warnings.push("Keyword search unavailable; results use the semantic leg only.");
       }
     }
 
@@ -182,11 +183,12 @@ export class SemanticSearch {
     return {
       query: args.query,
       results,
+      warnings,
       index: {
         documents_indexed: st.documents_indexed,
         documents_total: st.documents_total,
         syncing: st.syncing,
-        complete: st.documents_total !== null && st.documents_indexed >= st.documents_total,
+        complete: st.documents_total !== null && st.documents_indexed >= st.documents_total && !st.last_error,
         last_error: st.last_error,
       },
     };

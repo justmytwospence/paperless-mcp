@@ -77,7 +77,7 @@ export function registerFileUploadTools(server: McpServer, api: PaperlessAPI, ro
       "that folder is mounted for you), then call this with 'path' relative to the upload area: " +
       "'<your agent folder>/<file name>', e.g. 'agent-alice/invoice.pdf'. For documents on the web use " +
       "post_document_from_url instead. The document is tagged with your agent folder's name. Set 'title' (and other " +
-      "metadata) if you know it. Waits for Paperless to consume the file (default 30s, at most 45s) and reports " +
+      "metadata) if you know it. Polls for consumption (default 30s, at most 45s measured from call start; does not cancel upload HTTP) and reports " +
       "'created' with document_id and web_url, 'duplicate' with the existing document, 'failed', or " +
       "'pending' (check later with get_task_status). You may delete your copy afterwards.",
     {

@@ -42,7 +42,12 @@ Every response ends with the index's coverage:
            "complete": false, "last_error": null }
 ```
 
-An agent can tell "not found" from "not indexed yet", and the tool's description tells it to.
+The agent can see whether indexing is incomplete, but coverage does not prove that a
+missing document is absent: the snapshot can be stale or permissions can have changed.
+`paperless://library/index-status` exposes this library's cached status without an
+upstream request, search, model load or wait. A failed keyword leg returns a `warnings`
+entry while preserving available semantic results, rather than silently implying full
+hybrid coverage.
 
 ## Keeping in sync
 
@@ -53,8 +58,11 @@ An agent can tell "not found" from "not indexed yet", and the tool's description
   left the library, and catches new notes (which do not change a document's modified time).
 - **Only changed text is re-embedded.** Content and metadata are hashed separately: a tag
   or title change re-embeds one small metadata chunk, an OCR fix re-embeds the content.
-- A document that cannot be fetched is retried, then skipped and retried at the next tick;
-  `last_error` says which, and stays set until it is indexed.
+- A document that cannot be fetched is retried (up to three attempts for transient
+  failures), then skipped and retried at the next tick; `last_error` says which, and
+  stays set until it is indexed. The HTTP layer may retry a safe read 429 once; the
+  indexer does not multiply an exhausted 429 retry. All sync calls share the process
+  [admission and timeout policy](discovery.md#local-admission-not-a-rest-quota).
 - The newest documents are indexed first: they are the ones most likely asked about.
 
 ## Sizing

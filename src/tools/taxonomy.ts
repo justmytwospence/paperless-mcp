@@ -5,7 +5,7 @@ import type { PaginationResponse } from "../api/types.js";
 import { enhanceMatchingAlgorithm, enhanceMatchingAlgorithmArray } from "../api/utils.js";
 import { matchingAlgorithmSchema } from "./utils/matchingAlgorithm.js";
 import { buildQueryString } from "./utils/queryString.js";
-import { jsonResult, READ_ONLY, registerTool, WRITE } from "./utils/register.js";
+import { jsonResult, READ_ONLY, registerTool, REPLACE, WRITE } from "./utils/register.js";
 
 const LIST_SHAPE = {
   page: z.number().optional(),
@@ -103,7 +103,7 @@ export function registerTaxonomyTools(
   registerTool(
     server,
     "update_tag",
-    "Rename a tag or change its color or matching rule. Omitted fields are left unchanged.",
+    "Rename a tag or replace its color or matching rule. Omitted fields are left unchanged; existing values can be overwritten for every document using this tag.",
     {
       id: z.number(),
       name: z.string().optional(),
@@ -111,7 +111,7 @@ export function registerTaxonomyTools(
       match: z.string().optional(),
       matching_algorithm: matchingAlgorithmSchema.optional(),
     },
-    WRITE,
+    REPLACE,
     async ({ id, ...data }) => jsonResult(enhanceMatchingAlgorithm(await api.updateTag(id, data)))
   );
 

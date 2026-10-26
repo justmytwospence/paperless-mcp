@@ -1,3 +1,4 @@
+import { RequestPolicy } from "./requestPolicy.js";
 import type {
   BulkEditDocumentsResult,
   BulkEditParameters,
@@ -38,6 +39,7 @@ export type UploadMetadata = Record<
 // them whole is what lets names be resolved for every id.
 const ALL = "page_size=100000";
 const TAXONOMY_TTL_MS = 60_000;
+export const MAX_BINARY_BYTES = 16 * 1024 * 1024;
 
 export class OutOfScopeError extends PaperlessError {
   constructor(what: string) {
@@ -56,6 +58,8 @@ export interface PaperlessAPIOptions {
   excludeDocumentTypes?: string[];
   /** Type given to uploads that do not name one; defaults to the only included type. */
   uploadDocumentType?: string;
+  /** Share across libraries so tools, resource reads and indexing have one bound. */
+  requestPolicy?: RequestPolicy;
 }
 
 /** Taxonomy shared by every library in one Paperless. */
@@ -97,12 +101,15 @@ export class PaperlessAPI {
   private readonly apiVersion = process.env.PAPERLESS_API_VERSION || "9";
   private readonly cache = new Map<string, { at: number; value: Promise<unknown> }>();
   private scopePromise?: Promise<Scope | null>;
+  readonly requestPolicy: RequestPolicy;
 
   constructor(
     private readonly baseUrl: string,
     private readonly token: string,
     private readonly options: PaperlessAPIOptions = {}
-  ) {}
+  ) {
+    this.requestPolicy = options.requestPolicy ?? new RequestPolicy();
+  }
 
   /** The library's scope, or null for the whole Paperless. Resolved once. */
   scope(): Promise<Scope | null> {
@@ -349,33 +356,46 @@ export class PaperlessAPI {
     return this.raw<T>(path, options);
   }
 
-  private async raw<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+  /** Holds admission and the deadline until the body has been consumed. */
+  private async exchange<T>(path: string, options: RequestInit, read: (res: Response) => Promise<T>): Promise<T> {
     const url = `${this.baseUrl}/api${path}`;
-    const method = options.method || "GET";
+    const method = (options.method || "GET").toUpperCase();
+    return this.requestPolicy.run(method, async (signal) => {
+      const res = await fetch(url, {
+        ...options, method,
+        // A 307/308 can otherwise replay a multipart POST or PATCH automatically.
+        // Require a direct Paperless URL rather than redirect credentials/writes.
+        redirect: "error",
+        signal: options.signal ? AbortSignal.any([signal, options.signal]) : signal,
+      });
+      this.requestPolicy.observe(res);
+      if (res.status === 429) {
+        await res.body?.cancel();
+        throw this.requestPolicy.throttled();
+      }
+      if (!res.ok) return this.fail(res, url, method);
+      return read(res);
+    });
+  }
+
+  private async raw<T = any>(path: string, options: RequestInit = {}): Promise<T> {
     const isJson = !options.body || typeof options.body === "string";
-    const res = await fetch(url, {
+    return this.exchange(path, {
       ...options,
-      method,
       headers: this.headers({
         ...(isJson ? { "Content-Type": "application/json" } : {}),
         ...((options.headers as Record<string, string>) || {}),
       }),
+    }, async (res) => {
+      if (res.status === 204) return undefined as T;
+      const text = await res.text();
+      if (!text) return undefined as T;
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        return text as T;
+      }
     });
-    if (!res.ok) {
-      return this.fail(res, url, method);
-    }
-    if (res.status === 204) {
-      return undefined as T;
-    }
-    const text = await res.text();
-    if (!text) {
-      return undefined as T;
-    }
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      return text as T;
-    }
   }
 
   private cached<T>(key: string, load: () => Promise<T>): Promise<T> {
@@ -394,15 +414,33 @@ export class PaperlessAPI {
   }
 
   private async binary(path: string): Promise<BinaryResponse> {
-    const url = `${this.baseUrl}/api${path}`;
-    const res = await fetch(url, { headers: { Authorization: `Token ${this.token}` } });
-    if (!res.ok) {
-      return this.fail(res, url, "GET");
-    }
-    return {
-      data: Buffer.from(await res.arrayBuffer()),
-      contentType: res.headers.get("content-type") || undefined,
-    };
+    return this.exchange(path, { headers: { Authorization: `Token ${this.token}` } }, async (res) => {
+      const tooLarge = () => new Error("Document resource exceeds 16 MiB; use the document's web_url to download it in Paperless.");
+      if (Number(res.headers.get("content-length")) > MAX_BINARY_BYTES) {
+        await res.body?.cancel();
+        throw tooLarge();
+      }
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const reader = res.body?.getReader();
+      if (reader) {
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            if (size > MAX_BINARY_BYTES) {
+              await reader.cancel();
+              throw tooLarge();
+            }
+            chunks.push(value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      }
+      return { data: Buffer.concat(chunks, size), contentType: res.headers.get("content-type") || undefined };
+    });
   }
 
   // Documents
@@ -412,7 +450,8 @@ export class PaperlessAPI {
     method: string,
     parameters: BulkEditParameters = {}
   ): Promise<BulkEditDocumentsResult> {
-    await this.assertInScope(documents);
+    await this.assertInScope(parameters.metadata_document_id === undefined
+      ? documents : [...documents, parameters.metadata_document_id]);
     if (method === "set_document_type") await this.assertTypeInScope(parameters.document_type ?? null);
     const p = parameters as Record<string, unknown>;
     await this.assertTaxonomyInScope({
@@ -471,12 +510,9 @@ export class PaperlessAPI {
     for (const field of (metadata.custom_fields as number[]) || []) {
       form.append("custom_fields", String(field));
     }
-    const url = `${this.baseUrl}/api/documents/post_document/`;
-    const res = await fetch(url, { method: "POST", headers: this.headers(), body: form });
-    if (!res.ok) {
-      return this.fail(res, url, "POST");
-    }
-    const text = await res.text();
+    const text = await this.exchange("/documents/post_document/", {
+      method: "POST", headers: this.headers(), body: form,
+    }, (res) => res.text());
     let parsed: unknown = text;
     try {
       parsed = JSON.parse(text);
@@ -488,6 +524,9 @@ export class PaperlessAPI {
   }
 
   async getDocuments(query = ""): Promise<DocumentsResponse> {
+    // A scoped result filter must not allow an out-of-library similarity seed.
+    const seeds = new URLSearchParams(query.replace(/^\?/, "")).getAll("more_like_id");
+    if (seeds.length) await this.assertInScope(seeds.map(Number));
     // Appended last: Django reads the last value of a repeated parameter, so a
     // caller's own document_type__id__in / __none cannot widen the scope.
     const scope = await this.scopeQuery();
