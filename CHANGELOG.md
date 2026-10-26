@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.4.0
 
 - Complete MCP annotations and titles; replacement-capable document/tag updates are
   destructive, assignment updates/note deletion are idempotent, and local URI generation
